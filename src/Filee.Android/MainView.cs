@@ -126,7 +126,7 @@ public sealed class MainView : UserControl
         Canvas.SetTop(caption, cy - 22);
         _donut.Children.Add(caption);
 
-        var formats = _inputs.Count == 0
+        string[] formats = _inputs.Count == 0
             ? ["JPG", "PNG", "WEBP", "PDF", "ZIP"]
             : MobileConversion.AvailableFormats(_inputs);
         for (int i = 0; i < formats.Length; i++)
