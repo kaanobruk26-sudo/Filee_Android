@@ -193,7 +193,7 @@ public sealed class MainView : UserControl
                 _status.Text = "PDF dosyaları birleştiriliyor…";
                 var progress = new Progress<string>(message => _status.Text = message);
                 var pages = await MobileConversion.MergePdfsAsync(_inputs, output, progress);
-                _status.Text = `PDF birleştirildi: ${pages} sayfa ✓`;
+                _status.Text = $"PDF birleştirildi: {pages} sayfa ✓";
             }
             else if (format == "AYIR" && _inputs.All(x => MobileConversion.IsPdf(x.Name)))
             {
@@ -203,7 +203,7 @@ public sealed class MainView : UserControl
                 _status.Text = "PDF sayfaları ayrılıyor…";
                 var progress = new Progress<string>(message => _status.Text = message);
                 var pages = await MobileConversion.SplitPdfsAsync(_inputs, folders[0], progress);
-                _status.Text = `${pages} ayrı PDF oluşturuldu ✓`;
+                _status.Text = $"{pages} ayrı PDF oluşturuldu ✓";
             }
             else if (_inputs.All(x => MobileConversion.IsPdf(x.Name)) &&
                      format is "JPG" or "PNG")
