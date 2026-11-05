@@ -2,6 +2,7 @@ using System.IO.Compression;
 using Android.Graphics;
 using Android.Graphics.Pdf;
 using Avalonia.Platform.Storage;
+using Path = System.IO.Path;
 
 namespace Filee.Mobile;
 
@@ -21,7 +22,7 @@ internal static class MobileConversion
     public static string[] AvailableFormats(IReadOnlyList<IStorageFile> inputs)
     {
         if (inputs.Count == 0) return Array.Empty<string>();
-        return inputs.All(x => IsImage(x))
+        return inputs.All(x => IsImage(x.Name))
             ? ["JPG", "PNG", "WEBP", "PDF", "ZIP"] : ["ZIP"];
     }
 
