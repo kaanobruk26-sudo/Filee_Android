@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-  <style name="FileeTheme" parent="@android:style/Theme.Material.Light.NoActionBar">
+  <style name="FileeTheme" parent="@style/Theme.AppCompat.DayNight.NoActionBar">
     <item name="android:statusBarColor">#13141E</item>
     <item name="android:navigationBarColor">#13141E</item>
     <item name="android:windowLightStatusBar">false</item>

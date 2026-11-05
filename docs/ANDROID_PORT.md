@@ -35,3 +35,7 @@ No successful APK compilation, installation or device validation has been claime
 3. Verify and replace incompatible Android ARM64 native engines, then connect Filee.Engines and JobQueue.
 4. Port video/audio via Android-compatible FFmpeg and verify HEVC HDR PQ/10-bit metadata.
 5. Continue format parity and mobile preset/UI work, while preserving MIT and third-party notices.
+
+## 0.1.2 startup repair
+
+The automated Android 15 launch test caught `java.lang.IllegalStateException: You need to use a Theme.AppCompat theme`. Replaced the Android platform Material theme with `Theme.AppCompat.DayNight.NoActionBar` (required by Avalonia.Android's AppCompatActivity). The 0.1.1 port also migrated to `IActivityApplicationLifetime.MainViewFactory` for Avalonia 12. GitHub Actions now builds and tries to launch each APK in an Android emulator and retains logcat + screenshot diagnostics.
