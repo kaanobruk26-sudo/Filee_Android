@@ -120,7 +120,7 @@ internal static class MobileConversion
             for (int fileIndex = 0; fileIndex < inputs.Count; fileIndex++)
             {
                 var input = inputs[fileIndex];
-                var cacheDir = Android.App.Application.Context.CacheDir?.AbsolutePath
+                var cacheDir = global::Android.App.Application.Context.CacheDir?.AbsolutePath
                     ?? throw new IOException("Android önbellek klasörüne erişilemiyor.");
                 var temporary = Path.Combine(cacheDir, $"filee_{Guid.NewGuid():N}.pdf");
                 try
