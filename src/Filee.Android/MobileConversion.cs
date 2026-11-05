@@ -237,7 +237,7 @@ internal static class MobileConversion
             using var merged = new PdfSharpDocument();
             for (int i = 0; i < inputs.Count; i++)
             {
-                progress?.Report(`PDF birleştiriliyor: ${i + 1}/${inputs.Count}`);
+                progress?.Report($"PDF birleştiriliyor: {i + 1}/{inputs.Count}");
                 var path = await CachePdfAsync(inputs[i]);
                 cached.Add(path);
                 var original = PdfReader.Open(path, PdfDocumentOpenMode.Import);
@@ -286,10 +286,10 @@ internal static class MobileConversion
 
                 for (int pageIndex = 0; pageIndex < original.PageCount; pageIndex++)
                 {
-                    progress?.Report(`PDF ayrılıyor: ${inputIndex + 1}/${inputs.Count} • ${pageIndex + 1}/${original.PageCount}`);
+                    progress?.Report($"PDF ayrılıyor: {inputIndex + 1}/{inputs.Count} • {pageIndex + 1}/{original.PageCount}");
                     using var single = new PdfSharpDocument();
                     single.AddPage(original.Pages[pageIndex]);
-                    var fileName = `${safe}_${batchId}_sayfa_${pageIndex + 1:000}.pdf`;
+                    var fileName = $"{safe}_{batchId}_sayfa_{pageIndex + 1:000}.pdf";
                     var output = await destination.CreateFileAsync(fileName)
                         ?? throw new IOException("Sayfa dosyası oluşturulamadı: " + fileName);
                     await using var stream = await output.OpenWriteAsync();
