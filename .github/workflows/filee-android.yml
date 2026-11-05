@@ -1,0 +1,40 @@
+name: Filee Android (experimental)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/android-alpha]
+    paths:
+      - 'src/Filee.Android/**'
+      - 'src/Filee.Core/**'
+      - 'Directory.Packages.props'
+      - 'Directory.Build.props'
+      - '.github/workflows/filee-android.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout Filee
+        uses: actions/checkout@v4
+      - name: Install Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install Android workload
+        run: dotnet workload install android
+      - name: Build APK
+        run: dotnet publish src/Filee.Android/Filee.Android.csproj -c Release -p:AndroidPackageFormat=apk
+      - name: Upload APK for testing
+        uses: actions/upload-artifact@v4
+        with:
+          name: filee-android-alpha-apk
+          path: src/Filee.Android/bin/Release/**/*.apk
+          if-no-files-found: error
