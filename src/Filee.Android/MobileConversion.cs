@@ -3,6 +3,8 @@ using Android.Graphics;
 using Android.Graphics.Pdf;
 using Android.OS;
 using Avalonia.Platform.Storage;
+using PdfSharpDocument = PdfSharp.Pdf.PdfDocument;
+using PdfSharp.Pdf.IO;
 using Path = System.IO.Path;
 
 namespace Filee.Mobile;
@@ -27,7 +29,9 @@ internal static class MobileConversion
         if (inputs.All(x => IsImage(x.Name)))
             return ["JPG", "PNG", "WEBP", "PDF", "ZIP"];
         if (inputs.All(x => IsPdf(x.Name)))
-            return ["JPG", "PNG", "ZIP"];
+            return inputs.Count > 1
+                ? ["JPG", "PNG", "BİRLEŞTİR", "AYIR", "ZIP"]
+                : ["JPG", "PNG", "AYIR", "ZIP"];
         return ["ZIP"];
     }
 
@@ -185,6 +189,121 @@ internal static class MobileConversion
             }
             return total;
         });
+    }
+
+
+    /// <summary>
+    /// Export a SAF PDF to app-private seekable storage with a fixed 200 MiB limit.
+    /// PDFsharp can read the resulting local file without relying on seekable SAF streams.
+    /// </summary>
+    private static async Task<string> CachePdfAsync(IStorageFile input)
+    {
+        var cacheDir = global::Android.App.Application.Context.CacheDir?.AbsolutePath
+            ?? throw new IOException("Android önbellek klasörü bulunamadı.");
+        var filePath = Path.Combine(cacheDir, "filee_" + Guid.NewGuid().ToString("N") + ".pdf");
+        try
+        {
+            await using var source = await input.OpenReadAsync();
+            await using var dest = new FileStream(filePath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            var buffer = new byte[131072];
+            long total = 0;
+            int read;
+            while ((read = await source.ReadAsync(buffer.AsMemory())) > 0)
+            {
+                total += read;
+                if (total > 200L * 1024 * 1024)
+                    throw new InvalidDataException("PDF 200 MB sınırını aşıyor.");
+                await dest.WriteAsync(buffer.AsMemory(0, read));
+            }
+            return filePath;
+        }
+        catch
+        {
+            if (File.Exists(filePath)) File.Delete(filePath);
+            throw;
+        }
+    }
+
+    /// <summary>Merge PDFs in the order selected, without rasterizing their pages.</summary>
+    public static async Task<int> MergePdfsAsync(IReadOnlyList<IStorageFile> inputs, IStorageFile output, IProgress<string>? progress = null)
+    {
+        if (inputs.Count < 2 || !inputs.All(x => IsPdf(x.Name)))
+            throw new InvalidDataException("Birleştirmek için en az iki PDF seçilmelidir.");
+
+        var cached = new List<string>();
+        var opened = new List<PdfSharpDocument>();
+        try
+        {
+            using var merged = new PdfSharpDocument();
+            for (int i = 0; i < inputs.Count; i++)
+            {
+                progress?.Report(`PDF birleştiriliyor: ${i + 1}/${inputs.Count}`);
+                var path = await CachePdfAsync(inputs[i]);
+                cached.Add(path);
+                var original = PdfReader.Open(path, PdfDocumentOpenMode.Import);
+                opened.Add(original); // Keep imports alive until the output is written.
+                if (original.PageCount > 300)
+                    throw new InvalidDataException("PDF başına en fazla 300 sayfa destekleniyor.");
+                foreach (var page in original.Pages)
+                    merged.AddPage(page);
+            }
+            await using var result = await output.OpenWriteAsync();
+            await Task.Run(() => merged.Save(result, false));
+            await result.FlushAsync();
+            return merged.PageCount;
+        }
+        finally
+        {
+            foreach (var document in opened) document.Dispose();
+            foreach (var path in cached)
+                if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    /// <summary>Split a PDF into one lossless PDF file per page.</summary>
+    public static async Task<int> SplitPdfsAsync(
+        IReadOnlyList<IStorageFile> inputs,
+        IStorageFolder destination,
+        IProgress<string>? progress = null)
+    {
+        if (inputs.Count == 0 || !inputs.All(x => IsPdf(x.Name)))
+            throw new InvalidDataException("Ayırmak için PDF dosyası seçilmelidir.");
+
+        int total = 0;
+        var batchId = Guid.NewGuid().ToString("N")[..6];
+        for (int inputIndex = 0; inputIndex < inputs.Count; inputIndex++)
+        {
+            var path = await CachePdfAsync(inputs[inputIndex]);
+            try
+            {
+                using var original = PdfReader.Open(path, PdfDocumentOpenMode.Import);
+                if (original.PageCount > 300)
+                    throw new InvalidDataException("PDF başına en fazla 300 sayfa destekleniyor.");
+                var stem = Path.GetFileNameWithoutExtension(inputs[inputIndex].Name);
+                var safe = string.Concat(stem.Select(c =>
+                    char.IsLetterOrDigit(c) || c is '-' or '_' ? c : '_'));
+                if (string.IsNullOrWhiteSpace(safe)) safe = "pdf";
+
+                for (int pageIndex = 0; pageIndex < original.PageCount; pageIndex++)
+                {
+                    progress?.Report(`PDF ayrılıyor: ${inputIndex + 1}/${inputs.Count} • ${pageIndex + 1}/${original.PageCount}`);
+                    using var single = new PdfSharpDocument();
+                    single.AddPage(original.Pages[pageIndex]);
+                    var fileName = `${safe}_${batchId}_sayfa_${pageIndex + 1:000}.pdf`;
+                    var output = await destination.CreateFileAsync(fileName)
+                        ?? throw new IOException("Sayfa dosyası oluşturulamadı: " + fileName);
+                    await using var stream = await output.OpenWriteAsync();
+                    await Task.Run(() => single.Save(stream, false));
+                    await stream.FlushAsync();
+                    total++;
+                }
+            }
+            finally
+            {
+                if (File.Exists(path)) File.Delete(path);
+            }
+        }
+        return total;
     }
 
     public static async Task CreateZipAsync(IReadOnlyList<IStorageFile> inputs, IStorageFile output)

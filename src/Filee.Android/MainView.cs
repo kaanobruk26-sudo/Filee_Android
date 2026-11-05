@@ -78,7 +78,7 @@ public sealed class MainView : UserControl
         layout.Children.Add(_status);
         layout.Children.Add(new TextBlock
         {
-            Text = "Filee Android topluluk portu • α0.1.3",
+            Text = "Filee Android topluluk portu • α0.1.4",
             Foreground = Muted, FontSize = 11, TextAlignment = TextAlignment.Center
         });
         Content = new Border
@@ -182,6 +182,28 @@ public sealed class MainView : UserControl
                 _status.Text = "ZIP hazırlanıyor…";
                 await MobileConversion.CreateZipAsync(_inputs, output);
                 _status.Text = "ZIP kaydedildi ✓";
+            }
+
+            else if (format == "BİRLEŞTİR" && _inputs.Count >= 2 &&
+                     _inputs.All(x => MobileConversion.IsPdf(x.Name)))
+            {
+                var output = await picker.SaveFilePickerAsync(new FilePickerSaveOptions
+                { Title = "Birleştirilmiş PDF'yi kaydet", SuggestedFileName = "filee_birlesik.pdf" });
+                if (output is null) return;
+                _status.Text = "PDF dosyaları birleştiriliyor…";
+                var progress = new Progress<string>(message => _status.Text = message);
+                var pages = await MobileConversion.MergePdfsAsync(_inputs, output, progress);
+                _status.Text = `PDF birleştirildi: ${pages} sayfa ✓`;
+            }
+            else if (format == "AYIR" && _inputs.All(x => MobileConversion.IsPdf(x.Name)))
+            {
+                var folders = await picker.OpenFolderPickerAsync(new FolderPickerOpenOptions
+                { Title = "Ayrılan PDF sayfalarının kaydedileceği klasörü seç" });
+                if (folders.Count == 0) return;
+                _status.Text = "PDF sayfaları ayrılıyor…";
+                var progress = new Progress<string>(message => _status.Text = message);
+                var pages = await MobileConversion.SplitPdfsAsync(_inputs, folders[0], progress);
+                _status.Text = `${pages} ayrı PDF oluşturuldu ✓`;
             }
             else if (_inputs.All(x => MobileConversion.IsPdf(x.Name)) &&
                      format is "JPG" or "PNG")

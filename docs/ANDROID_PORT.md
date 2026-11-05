@@ -45,3 +45,8 @@ The automated Android 15 launch test caught `java.lang.IllegalStateException: Yo
 When the picked files are PDFs, the circular menu now offers JPG and PNG in addition to ZIP. Selecting either asks for a destination folder and rasterizes every PDF page separately using Android's native PdfRenderer. A private cache copy is used because SAF streams may not be seekable. Original PDFs are unchanged; output filenames include a unique batch prefix and page numbers. The current cap is 200 MB per PDF, 300 pages, and 3200 pixels for the longest rendered side. Encrypted/unsupported PDFs are rejected with an error message.
 
 Automated GitHub Actions checks compilation and opening on an Android emulator. Conversion correctness still requires manual device testing with actual PDF inputs.
+
+
+## 0.1.4 PDF merging and splitting
+
+Adds Android-compatible PDFsharp 6.2.4, the same library used by Filee.Engines. When multiple PDF files are selected, BİRLEŞTİR appears on the ring and preserves vector PDF pages in one output PDF, following the selected order. AYIR exports a separate single-page PDF to a chosen folder. Uses the Android SAF picker, app-private temporary seekable input files (200 MB cap per PDF), unique filename suffixes and up to 300 pages per source. Encrypted or malformed inputs may fail; no OCR or PDF repair is attempted. Tests must verify actual merge/split results on a device; the emulator CI only checks startup.
