@@ -281,9 +281,9 @@ internal static class MobileConversion
             {
                 foreach (var page in first.Pages) merged.AddPage(page);
                 foreach (var page in second.Pages) merged.AddPage(page);
-                merged.Save(mergedPath);
                 if (merged.PageCount != 3)
                     throw new InvalidOperationException("PDF birleştirme sayfa sayısı yanlış.");
+                merged.Save(mergedPath);
             }
             using (var checkedMerge = PdfReader.Open(mergedPath, PdfDocumentOpenMode.Import))
             using (var split = new PdfSharpDocument())
@@ -331,9 +331,10 @@ internal static class MobileConversion
                 foreach (var page in original.Pages)
                     merged.AddPage(page);
             }
+            int pageCount = merged.PageCount;
             progress?.Report("PDF kaydediliyor…");
             await SavePdfSafAsync(merged, output);
-            return merged.PageCount;
+            return pageCount;
         }
         finally
         {
