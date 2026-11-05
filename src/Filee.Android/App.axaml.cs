@@ -10,8 +10,12 @@ public partial class App : Avalonia.Application
 
     public override void OnFrameworkInitializationCompleted()
     {
-        if (ApplicationLifetime is ISingleViewApplicationLifetime lifetime)
-            lifetime.MainView = new MainView();
+        // Avalonia 12: Android uses IActivityApplicationLifetime. A fresh
+        // view is created for each activity, including orientation changes.
+        if (ApplicationLifetime is IActivityApplicationLifetime activity)
+            activity.MainViewFactory = () => new MainView();
+        else if (ApplicationLifetime is ISingleViewApplicationLifetime singleView)
+            singleView.MainView = new MainView();
 
         base.OnFrameworkInitializationCompleted();
     }
