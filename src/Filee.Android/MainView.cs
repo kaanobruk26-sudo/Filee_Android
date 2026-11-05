@@ -202,7 +202,7 @@ public sealed class MainView : UserControl
                 {
                     _status.Text = $"Dönüştürülüyor: {i + 1}/{_inputs.Count}";
                     var target = await folders[0].CreateFileAsync(MobileConversion.OutputFileName(_inputs[i].Name, format, i));
-                    await MobileConversion.ConvertImageAsync(_inputs[i], target);
+                    await MobileConversion.ConvertImageAsync(_inputs[i], target, format);
                 }
                 _status.Text = $"{_inputs.Count} dosya kaydedildi ✓";
             }
