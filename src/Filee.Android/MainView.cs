@@ -13,7 +13,7 @@ public sealed class MainView : UserControl
     private readonly List<IStorageFile> _inputs = [];
     private readonly TextBlock _selected, _status;
     private readonly Canvas _donut;
-    private readonly Button _open;
+    private readonly Avalonia.Controls.Button _open;
     private bool _busy;
 
     private static readonly IBrush Dark = Brush("#13141E");
@@ -89,7 +89,7 @@ public sealed class MainView : UserControl
         RenderDonut();
     }
 
-    private static Button Button(string title) => new()
+    private static Avalonia.Controls.Button Button(string title) => new()
     {
         Content = title, Background = Accent, Foreground = White,
         FontWeight = FontWeight.SemiBold, FontSize = 14,
