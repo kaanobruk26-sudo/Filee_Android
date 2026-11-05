@@ -224,6 +224,90 @@ internal static class MobileConversion
         }
     }
 
+    /// <summary>
+    /// PDFsharp's writer requires a seekable stream; Android SAF output streams
+    /// may be non-seekable. Save to app-private cache then copy the result.
+    /// </summary>
+    private static async Task SavePdfSafAsync(PdfSharpDocument pdf, IStorageFile output)
+    {
+        var cacheDir = global::Android.App.Application.Context.CacheDir?.AbsolutePath
+            ?? throw new IOException("Android önbellek klasörü bulunamadı.");
+        var temporary = Path.Combine(cacheDir, "filee_out_" + Guid.NewGuid().ToString("N") + ".pdf");
+        try
+        {
+            await Task.Run(() => pdf.Save(temporary));
+            await using var source = new FileStream(temporary, FileMode.Open, FileAccess.Read, FileShare.Read);
+            await using var destination = await output.OpenWriteAsync();
+            await source.CopyToAsync(destination);
+            await destination.FlushAsync();
+        }
+        finally
+        {
+            if (File.Exists(temporary))
+                File.Delete(temporary);
+        }
+    }
+
+    /// <summary>
+    /// An Android-only PDFsharp regression probe with synthetic documents.
+    /// It never accesses or modifies the user's documents.
+    /// </summary>
+    public static void RunPdfEngineSelfTest()
+    {
+        var cacheDir = global::Android.App.Application.Context.CacheDir?.AbsolutePath
+            ?? throw new IOException("Android önbellek klasörü bulunamadı.");
+        var tmp = Path.Combine(cacheDir, "filee_test_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tmp);
+        try
+        {
+            var a = Path.Combine(tmp, "a.pdf");
+            var b = Path.Combine(tmp, "b.pdf");
+            var mergedPath = Path.Combine(tmp, "merged.pdf");
+            var splitPath = Path.Combine(tmp, "split.pdf");
+            using (var pdf = new PdfSharpDocument())
+            {
+                pdf.AddPage();
+                pdf.Save(a);
+            }
+            using (var pdf = new PdfSharpDocument())
+            {
+                pdf.AddPage();
+                pdf.AddPage();
+                pdf.Save(b);
+            }
+            using (var first = PdfReader.Open(a, PdfDocumentOpenMode.Import))
+            using (var second = PdfReader.Open(b, PdfDocumentOpenMode.Import))
+            using (var merged = new PdfSharpDocument())
+            {
+                foreach (var page in first.Pages) merged.AddPage(page);
+                foreach (var page in second.Pages) merged.AddPage(page);
+                merged.Save(mergedPath);
+                if (merged.PageCount != 3)
+                    throw new InvalidOperationException("PDF birleştirme sayfa sayısı yanlış.");
+            }
+            using (var checkedMerge = PdfReader.Open(mergedPath, PdfDocumentOpenMode.Import))
+            using (var split = new PdfSharpDocument())
+            {
+                if (checkedMerge.PageCount != 3)
+                    throw new InvalidDataException("Kaydedilen birleşik PDF açılamadı.");
+                split.AddPage(checkedMerge.Pages[1]);
+                split.Save(splitPath);
+            }
+            using var checkedSplit = PdfReader.Open(splitPath, PdfDocumentOpenMode.Import);
+            if (checkedSplit.PageCount != 1)
+                throw new InvalidDataException("Kaydedilen ayrılmış PDF doğrulanamadı.");
+            global::Android.Util.Log.Info("FileePdfTest", "PASS: merge 1+2=3 pages; split page=1");
+        }
+        catch (Exception e)
+        {
+            global::Android.Util.Log.Error("FileePdfTest", "FAIL: " + e);
+        }
+        finally
+        {
+            if (Directory.Exists(tmp)) Directory.Delete(tmp, true);
+        }
+    }
+
     /// <summary>Merge PDFs in the order selected, without rasterizing their pages.</summary>
     public static async Task<int> MergePdfsAsync(IReadOnlyList<IStorageFile> inputs, IStorageFile output, IProgress<string>? progress = null)
     {
@@ -247,9 +331,8 @@ internal static class MobileConversion
                 foreach (var page in original.Pages)
                     merged.AddPage(page);
             }
-            await using var result = await output.OpenWriteAsync();
-            await Task.Run(() => merged.Save(result, false));
-            await result.FlushAsync();
+            progress?.Report("PDF kaydediliyor…");
+            await SavePdfSafAsync(merged, output);
             return merged.PageCount;
         }
         finally
@@ -292,9 +375,7 @@ internal static class MobileConversion
                     var fileName = $"{safe}_{batchId}_sayfa_{pageIndex + 1:000}.pdf";
                     var output = await destination.CreateFileAsync(fileName)
                         ?? throw new IOException("Sayfa dosyası oluşturulamadı: " + fileName);
-                    await using var stream = await output.OpenWriteAsync();
-                    await Task.Run(() => single.Save(stream, false));
-                    await stream.FlushAsync();
+                    await SavePdfSafAsync(single, output);
                     total++;
                 }
             }

@@ -78,7 +78,7 @@ public sealed class MainView : UserControl
         layout.Children.Add(_status);
         layout.Children.Add(new TextBlock
         {
-            Text = "Filee Android topluluk portu • α0.1.4",
+            Text = "Filee Android topluluk portu • α0.1.5",
             Foreground = Muted, FontSize = 11, TextAlignment = TextAlignment.Center
         });
         Content = new Border
@@ -243,7 +243,11 @@ public sealed class MainView : UserControl
                 _status.Text = $"{_inputs.Count} dosya kaydedildi ✓";
             }
         }
-        catch (Exception e) { _status.Text = $"Dönüştürme başarısız: {e.Message}"; }
+        catch (Exception e)
+        {
+            global::Android.Util.Log.Error("FileeConvert", e.ToString());
+            _status.Text = $"Dönüştürme başarısız ({e.GetType().Name}): {e.Message}";
+        }
         finally
         {
             _busy = false;

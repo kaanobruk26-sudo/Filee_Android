@@ -25,3 +25,21 @@ if [[ -z "$pid" ]]; then
   exit 1
 fi
 echo "Startup smoke check PASSED. App remains running with PID $pid."
+
+
+echo "Testing PDFsharp merge and split on Android emulator..."
+activity=$(adb shell cmd package resolve-activity --brief "$package" | tr -d '\r' | tail -n 1)
+if [[ "$activity" != *"/"* ]]; then
+  echo "Launcher activity not resolved: $activity" >&2
+  exit 1
+fi
+adb shell am force-stop "$package"
+adb logcat -c
+adb shell am start -n "$activity" --ez filee_pdf_selftest true
+sleep 10
+adb logcat -d -v brief -s FileePdfTest:I '*:S' | tee /tmp/filee-ci/pdf-self-test.txt
+if ! grep -q 'FileePdfTest.*PASS' /tmp/filee-ci/pdf-self-test.txt; then
+  echo "Android PDF engine regression check FAILED" >&2
+  exit 1
+fi
+echo "Android PDF engine regression check PASSED"

@@ -50,3 +50,8 @@ Automated GitHub Actions checks compilation and opening on an Android emulator. 
 ## 0.1.4 PDF merging and splitting
 
 Adds Android-compatible PDFsharp 6.2.4, the same library used by Filee.Engines. When multiple PDF files are selected, BİRLEŞTİR appears on the ring and preserves vector PDF pages in one output PDF, following the selected order. AYIR exports a separate single-page PDF to a chosen folder. Uses the Android SAF picker, app-private temporary seekable input files (200 MB cap per PDF), unique filename suffixes and up to 300 pages per source. Encrypted or malformed inputs may fail; no OCR or PDF repair is attempted. Tests must verify actual merge/split results on a device; the emulator CI only checks startup.
+
+
+## 0.1.5 Android SAF/PDFsharp writer repair
+
+In 0.1.4 real device testing PDF merge failed with Arg_NotSupportedException. The suspected issue was PDFsharp using seek operations with non-seekable Android SAF output streams. Merge and split now save PDFs to temporary seekable app-private cache files and copy them to the chosen document URI, then delete the temporary output. Logcat now captures the exception details using FileeConvert. The CI emulator smoke test executes a synthetic PDFsharp 1+2 page merge/split/readback check and requires a PASS log. Device testing with real SAF files remains necessary.
