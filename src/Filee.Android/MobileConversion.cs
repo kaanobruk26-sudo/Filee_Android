@@ -249,6 +249,78 @@ internal static class MobileConversion
     }
 
     /// <summary>
+    /// Save to a correctly typed Android PDF document URI. Android's PdfRenderer
+    /// confirms the resulting PDF is actually openable before reporting success.
+    /// </summary>
+    private static async Task SavePdfToNativeUriAsync(PdfSharpDocument pdf,
+        global::Android.Net.Uri output, int expectedPages)
+    {
+        var context = global::Android.App.Application.Context;
+        var cacheDir = context.CacheDir?.AbsolutePath
+            ?? throw new IOException("Android önbellek klasörüne ulaşılamıyor.");
+        var temp = Path.Combine(cacheDir, "filee_pdf_" + Guid.NewGuid().ToString("N") + ".pdf");
+        var verifyTemp = Path.Combine(cacheDir, "filee_verify_" + Guid.NewGuid().ToString("N") + ".pdf");
+        try
+        {
+            await Task.Run(() => pdf.Save(temp));
+
+            // Validate the generated local PDF before writing to the user's file.
+            VerifyPdfWithAndroidRenderer(temp, expectedPages);
+
+            var resolver = context.ContentResolver
+                ?? throw new IOException("Android dosya sağlayıcısına ulaşılamıyor.");
+            using (var dest = resolver.OpenOutputStream(output, "wt")
+                ?? throw new IOException("PDF yazma izni alınamadı."))
+            await using (var source = File.OpenRead(temp))
+            {
+                await source.CopyToAsync(dest);
+                await dest.FlushAsync();
+            }
+
+            // Read the user-visible output again, not merely the private temp
+            // file, to catch empty, truncated or corrupted SAF documents.
+            using (var written = resolver.OpenInputStream(output)
+                ?? throw new IOException("Kaydedilen PDF okunamıyor."))
+            await using (var verify = new FileStream(verifyTemp, FileMode.CreateNew,
+                FileAccess.Write, FileShare.None))
+            {
+                await written.CopyToAsync(verify);
+                await verify.FlushAsync();
+            }
+            VerifyPdfWithAndroidRenderer(verifyTemp, expectedPages);
+
+            var mime = resolver.GetType(output);
+            global::Android.Util.Log.Info("FileePdfSave",
+                $"PDF verified: pages={expectedPages}, bytes={new FileInfo(verifyTemp).Length}, mime={mime}");
+        }
+        finally
+        {
+            if (File.Exists(temp)) File.Delete(temp);
+            if (File.Exists(verifyTemp)) File.Delete(verifyTemp);
+        }
+    }
+
+    private static void VerifyPdfWithAndroidRenderer(string filePath, int expectedPages)
+    {
+        if (new FileInfo(filePath).Length < 100)
+            throw new InvalidDataException("Kaydedilen PDF boş veya eksik.");
+        using var fd = ParcelFileDescriptor.Open(new Java.IO.File(filePath), ParcelFileMode.ReadOnly)
+            ?? throw new IOException("PDF doğrulama için açılamadı.");
+        using var renderer = new PdfRenderer(fd);
+        if (renderer.PageCount != expectedPages)
+            throw new InvalidDataException(
+                $"PDF doğrulanamadı: {expectedPages} sayfa bekleniyordu, {renderer.PageCount} bulundu.");
+        if (expectedPages > 0)
+        {
+            using var page = renderer.OpenPage(0);
+            using var bitmap = Bitmap.CreateBitmap(64, 64, Bitmap.Config.Argb8888!)
+                ?? throw new OutOfMemoryException("PDF kontrol görüntüsü oluşturulamadı.");
+            bitmap.EraseColor(Color.White);
+            page.Render(bitmap, null, null, PdfRenderMode.ForDisplay);
+        }
+    }
+
+    /// <summary>
     /// An Android-only PDFsharp regression probe with synthetic documents.
     /// It never accesses or modifies the user's documents.
     /// </summary>
@@ -293,6 +365,8 @@ internal static class MobileConversion
                 split.AddPage(checkedMerge.Pages[1]);
                 split.Save(splitPath);
             }
+            VerifyPdfWithAndroidRenderer(mergedPath, 3);
+            VerifyPdfWithAndroidRenderer(splitPath, 1);
             using var checkedSplit = PdfReader.Open(splitPath, PdfDocumentOpenMode.Import);
             if (checkedSplit.PageCount != 1)
                 throw new InvalidDataException("Kaydedilen ayrılmış PDF doğrulanamadı.");
@@ -309,7 +383,7 @@ internal static class MobileConversion
     }
 
     /// <summary>Merge PDFs in the order selected, without rasterizing their pages.</summary>
-    public static async Task<int> MergePdfsAsync(IReadOnlyList<IStorageFile> inputs, IStorageFile output, IProgress<string>? progress = null)
+    public static async Task<int> MergePdfsAsync(IReadOnlyList<IStorageFile> inputs, global::Android.Net.Uri output, IProgress<string>? progress = null)
     {
         if (inputs.Count < 2 || !inputs.All(x => IsPdf(x.Name)))
             throw new InvalidDataException("Birleştirmek için en az iki PDF seçilmelidir.");
@@ -333,7 +407,7 @@ internal static class MobileConversion
             }
             int pageCount = merged.PageCount;
             progress?.Report("PDF kaydediliyor…");
-            await SavePdfSafAsync(merged, output);
+            await SavePdfToNativeUriAsync(merged, output, pageCount);
             return pageCount;
         }
         finally

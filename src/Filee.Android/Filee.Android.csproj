@@ -7,8 +7,8 @@
     <SupportedOSPlatformVersion>26</SupportedOSPlatformVersion>
     <ApplicationId>org.filee.mobile.community</ApplicationId>
     <ApplicationTitle>Filee Android (Community)</ApplicationTitle>
-    <ApplicationVersion>6</ApplicationVersion>
-    <ApplicationDisplayVersion>0.1.5-alpha</ApplicationDisplayVersion>
+    <ApplicationVersion>7</ApplicationVersion>
+    <ApplicationDisplayVersion>0.1.6-alpha</ApplicationDisplayVersion>
     <AndroidPackageFormat>apk</AndroidPackageFormat>
     <AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
   </PropertyGroup>

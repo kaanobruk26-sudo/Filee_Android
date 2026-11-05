@@ -78,7 +78,7 @@ public sealed class MainView : UserControl
         layout.Children.Add(_status);
         layout.Children.Add(new TextBlock
         {
-            Text = "Filee Android topluluk portu • α0.1.5",
+            Text = "Filee Android topluluk portu • α0.1.6",
             Foreground = Muted, FontSize = 11, TextAlignment = TextAlignment.Center
         });
         Content = new Border
@@ -187,13 +187,14 @@ public sealed class MainView : UserControl
             else if (format == "BİRLEŞTİR" && _inputs.Count >= 2 &&
                      _inputs.All(x => MobileConversion.IsPdf(x.Name)))
             {
-                var output = await picker.SaveFilePickerAsync(new FilePickerSaveOptions
-                { Title = "Birleştirilmiş PDF'yi kaydet", SuggestedFileName = "filee_birlesik.pdf" });
+                var activity = MainActivity.Current
+                    ?? throw new InvalidOperationException("Android PDF kayıt ekranı kullanılamıyor.");
+                var output = await activity.PickPdfSaveUriAsync("filee_birlesik.pdf");
                 if (output is null) return;
-                _status.Text = "PDF dosyaları birleştiriliyor…";
+                _status.Text = "PDF dosyaları birleştiriliyor ve doğrulanıyor…";
                 var progress = new Progress<string>(message => _status.Text = message);
                 var pages = await MobileConversion.MergePdfsAsync(_inputs, output, progress);
-                _status.Text = $"PDF birleştirildi: {pages} sayfa ✓";
+                _status.Text = $"PDF doğrulandı ve kaydedildi: {pages} sayfa ✓";
             }
             else if (format == "AYIR" && _inputs.All(x => MobileConversion.IsPdf(x.Name)))
             {

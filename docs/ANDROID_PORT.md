@@ -55,3 +55,8 @@ Adds Android-compatible PDFsharp 6.2.4, the same library used by Filee.Engines. 
 ## 0.1.5 Android SAF/PDFsharp writer repair
 
 In 0.1.4 real device testing PDF merge failed with Arg_NotSupportedException. The suspected issue was PDFsharp using seek operations with non-seekable Android SAF output streams. Merge and split now save PDFs to temporary seekable app-private cache files and copy them to the chosen document URI, then delete the temporary output. Logcat now captures the exception details using FileeConvert. The CI emulator smoke test executes a synthetic PDFsharp 1+2 page merge/split/readback check and requires a PASS log. Device testing with real SAF files remains necessary.
+
+
+## 0.1.6 Native PDF MIME and post-save validation
+
+A real device reported a merged PDF that could not be opened despite a successful page-count message. On Android, Avalonia's document picker may request the generic MIME `*/*`. Merge PDF saving therefore uses a native Android ACTION_CREATE_DOCUMENT intent with `application/pdf`, retaining the document picker and folder choice. The generated PDF is validated using Android's native PdfRenderer before writing, and the saved user-visible output is reopened and checked for page count, ability to render the first page and non-empty bytes before success is shown. The emulator regression also validates the PDFsharp merge and split samples with Android PdfRenderer; this does not replace a device test of external PDF input/output. PDF split still uses the previous save path and awaits the same MIME-specific upgrade.
