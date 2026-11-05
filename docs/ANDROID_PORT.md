@@ -39,3 +39,9 @@ No successful APK compilation, installation or device validation has been claime
 ## 0.1.2 startup repair
 
 The automated Android 15 launch test caught `java.lang.IllegalStateException: You need to use a Theme.AppCompat theme`. Replaced the Android platform Material theme with `Theme.AppCompat.DayNight.NoActionBar` (required by Avalonia.Android's AppCompatActivity). The 0.1.1 port also migrated to `IActivityApplicationLifetime.MainViewFactory` for Avalonia 12. GitHub Actions now builds and tries to launch each APK in an Android emulator and retains logcat + screenshot diagnostics.
+
+## 0.1.3 PDF pages to PNG/JPG
+
+When the picked files are PDFs, the circular menu now offers JPG and PNG in addition to ZIP. Selecting either asks for a destination folder and rasterizes every PDF page separately using Android's native PdfRenderer. A private cache copy is used because SAF streams may not be seekable. Original PDFs are unchanged; output filenames include a unique batch prefix and page numbers. The current cap is 200 MB per PDF, 300 pages, and 3200 pixels for the longest rendered side. Encrypted/unsupported PDFs are rejected with an error message.
+
+Automated GitHub Actions checks compilation and opening on an Android emulator. Conversion correctness still requires manual device testing with actual PDF inputs.

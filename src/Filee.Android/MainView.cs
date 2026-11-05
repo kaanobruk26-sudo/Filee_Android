@@ -78,7 +78,7 @@ public sealed class MainView : UserControl
         layout.Children.Add(_status);
         layout.Children.Add(new TextBlock
         {
-            Text = "Filee Android topluluk portu • α0.1.2",
+            Text = "Filee Android topluluk portu • α0.1.3",
             Foreground = Muted, FontSize = 11, TextAlignment = TextAlignment.Center
         });
         Content = new Border
@@ -182,6 +182,20 @@ public sealed class MainView : UserControl
                 _status.Text = "ZIP hazırlanıyor…";
                 await MobileConversion.CreateZipAsync(_inputs, output);
                 _status.Text = "ZIP kaydedildi ✓";
+            }
+            else if (_inputs.All(x => MobileConversion.IsPdf(x.Name)) &&
+                     format is "JPG" or "PNG")
+            {
+                var folders = await picker.OpenFolderPickerAsync(new FolderPickerOpenOptions
+                {
+                    Title = "PDF sayfalarının kaydedileceği klasörü seçin"
+                });
+                if (folders.Count == 0) return;
+                _status.Text = "PDF sayfaları dönüştürülüyor…";
+                var progress = new Progress<string>(message => _status.Text = message);
+                var converted = await MobileConversion.ConvertPdfPagesAsync(
+                    _inputs, folders[0], format, progress);
+                _status.Text = $"{converted} sayfa {format} olarak kaydedildi ✓";
             }
             else if (_inputs.Count == 1)
             {

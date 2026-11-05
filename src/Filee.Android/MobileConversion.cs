@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using Android.Graphics;
 using Android.Graphics.Pdf;
+using Android.OS;
 using Avalonia.Platform.Storage;
 using Path = System.IO.Path;
 
@@ -18,12 +19,16 @@ internal static class MobileConversion
     };
 
     public static bool IsImage(string name) => ImageExtensions.Contains(Path.GetExtension(name));
+    public static bool IsPdf(string name) => Path.GetExtension(name).Equals(".pdf", StringComparison.OrdinalIgnoreCase);
 
     public static string[] AvailableFormats(IReadOnlyList<IStorageFile> inputs)
     {
         if (inputs.Count == 0) return Array.Empty<string>();
-        return inputs.All(x => IsImage(x.Name))
-            ? ["JPG", "PNG", "WEBP", "PDF", "ZIP"] : ["ZIP"];
+        if (inputs.All(x => IsImage(x.Name)))
+            return ["JPG", "PNG", "WEBP", "PDF", "ZIP"];
+        if (inputs.All(x => IsPdf(x.Name)))
+            return ["JPG", "PNG", "ZIP"];
+        return ["ZIP"];
     }
 
     public static string OutputFileName(string original, string format, int index = -1)
@@ -88,6 +93,97 @@ internal static class MobileConversion
             }
             else if (!bitmap.Compress(codec, 90, destination))
                 throw new IOException($"{target} kodlanamadı.");
+        });
+    }
+
+
+    /// <summary>
+    /// Renders each page of one or more PDFs into JPG/PNG files in a folder
+    /// selected via Android's Storage Access Framework.
+    /// This is a rasterization, not an editable document conversion.
+    /// </summary>
+    public static async Task<int> ConvertPdfPagesAsync(
+        IReadOnlyList<IStorageFile> inputs,
+        IStorageFolder destination,
+        string target,
+        IProgress<string>? progress = null)
+    {
+        if (target is not ("JPG" or "PNG"))
+            throw new NotSupportedException("PDF sayfaları yalnızca JPG veya PNG olarak kaydedilebilir.");
+        if (inputs.Count == 0 || !inputs.All(x => IsPdf(x.Name)))
+            throw new InvalidDataException("Yalnızca PDF dosyaları seçin.");
+
+        return await Task.Run(async () =>
+        {
+            int total = 0;
+            string batchId = Guid.NewGuid().ToString("N")[..6];
+            for (int fileIndex = 0; fileIndex < inputs.Count; fileIndex++)
+            {
+                var input = inputs[fileIndex];
+                var cacheDir = Android.App.Application.Context.CacheDir?.AbsolutePath
+                    ?? throw new IOException("Android önbellek klasörüne erişilemiyor.");
+                var temporary = Path.Combine(cacheDir, $"filee_{Guid.NewGuid():N}.pdf");
+                try
+                {
+                    // PdfRenderer needs a seekable descriptor. A SAF content URI
+                    // may be a pipe, so copy it to a private cache file first.
+                    await using (var inputStream = await input.OpenReadAsync())
+                    await using (var cached = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                    {
+                        var buffer = new byte[131072];
+                        long totalBytes = 0;
+                        int read;
+                        while ((read = await inputStream.ReadAsync(buffer)) > 0)
+                        {
+                            totalBytes += read;
+                            if (totalBytes > 200L * 1024 * 1024)
+                                throw new InvalidDataException("PDF 200 MB sınırını aşıyor.");
+                            await cached.WriteAsync(buffer.AsMemory(0, read));
+                        }
+                    }
+
+                    // The renderer takes ownership of the ParcelFileDescriptor.
+                    using var fd = ParcelFileDescriptor.Open(
+                        new Java.IO.File(temporary), ParcelFileMode.ReadOnly)
+                        ?? throw new IOException("PDF okunamıyor.");
+                    using var renderer = new PdfRenderer(fd);
+                    if (renderer.PageCount > 300)
+                        throw new InvalidDataException("Bu prototip bir PDF için en fazla 300 sayfayı destekler.");
+
+                    var stem = Path.GetFileNameWithoutExtension(input.Name);
+                    var safe = string.Concat(stem.Select(c =>
+                        char.IsLetterOrDigit(c) || c is '-' or '_' ? c : '_'));
+                    if (string.IsNullOrWhiteSpace(safe)) safe = "pdf";
+
+                    for (int pageIndex = 0; pageIndex < renderer.PageCount; pageIndex++)
+                    {
+                        using var page = renderer.OpenPage(pageIndex);
+                        var scale = Math.Min(2.0, 3200.0 / Math.Max(page.Width, page.Height));
+                        var w = Math.Max(1, (int)Math.Round(page.Width * scale));
+                        var h = Math.Max(1, (int)Math.Round(page.Height * scale));
+                        using var bitmap = Bitmap.CreateBitmap(w, h, Bitmap.Config.Argb8888!)
+                            ?? throw new OutOfMemoryException("PDF sayfa görüntüsü oluşturulamadı.");
+                        bitmap.EraseColor(Color.White);
+                        page.Render(bitmap, null, null, PdfRenderMode.ForDisplay);
+                        var resultName = $"{safe}_{batchId}_sayfa_{pageIndex + 1:000}.{target.ToLowerInvariant()}";
+                        progress?.Report($"{fileIndex + 1}/{inputs.Count} PDF • {pageIndex + 1}/{renderer.PageCount} sayfa");
+                        var result = await destination.CreateFileAsync(resultName)
+                            ?? throw new IOException("Dosya oluşturulamadı: " + resultName);
+                        await using var outStream = await result.OpenWriteAsync();
+                        var format = target == "JPG" ? Bitmap.CompressFormat.Jpeg! : Bitmap.CompressFormat.Png!;
+                        if (!bitmap.Compress(format, 92, outStream))
+                            throw new IOException("Sayfa kaydedilemedi: " + resultName);
+                        await outStream.FlushAsync();
+                        total++;
+                    }
+                }
+                finally
+                {
+                    if (System.IO.File.Exists(temporary))
+                        System.IO.File.Delete(temporary);
+                }
+            }
+            return total;
         });
     }
 
