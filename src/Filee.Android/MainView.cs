@@ -24,7 +24,7 @@ public sealed class MainView : UserControl
     private readonly Avalonia.Controls.CheckBox _copyExactJpeg;
     private readonly Border _imageSettings;
     private readonly Border _batchPanel;
-    private readonly ProgressBar _batchProgress;
+    private readonly Avalonia.Controls.ProgressBar _batchProgress;
     private readonly TextBlock _batchSummary, _batchDetails;
     private bool _busy;
 
@@ -171,7 +171,7 @@ public sealed class MainView : UserControl
                 }
             }
         };
-        _batchProgress = new ProgressBar
+        _batchProgress = new Avalonia.Controls.ProgressBar
         {
             Minimum = 0, Maximum = 1, Value = 0, Height = 9,
             Foreground = Accent
