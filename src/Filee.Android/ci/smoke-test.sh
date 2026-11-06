@@ -96,3 +96,16 @@ if ! grep -q 'FileeBatchTest.*PASS' /tmp/filee-ci/batch-self-test.txt; then
   exit 1
 fi
 echo "Batch queue regression PASSED"
+
+
+echo "Testing saved-folder browser Android intent..."
+adb shell am force-stop "$package"
+adb logcat -c
+adb shell am start -n "$activity" --ez filee_folder_selftest true
+sleep 5
+adb logcat -d -v brief -s FileeFolderTest:I '*:S' | tee /tmp/filee-ci/folder-self-test.txt
+if ! grep -q 'FileeFolderTest.*PASS' /tmp/filee-ci/folder-self-test.txt; then
+  echo "Saved-folder intent regression FAILED" >&2
+  exit 1
+fi
+echo "Saved-folder intent regression PASSED"

@@ -45,6 +45,52 @@ public class MainActivity : AvaloniaMainActivity
         return pending.Task;
     }
 
+    private const string InitialUriExtra = "android.provider.extra.INITIAL_URI";
+
+    /// <summary>
+    /// Best-effort browsing of a saved SAF location with Android DocumentsUI.
+    /// Some document providers ignore EXTRA_INITIAL_URI; the UI says so.
+    /// </summary>
+    public void OpenSavedFolderBrowser(string contentUri)
+    {
+        var uri = global::Android.Net.Uri.Parse(contentUri)
+            ?? throw new ArgumentException("Kaydedilen konum geçersiz.", nameof(contentUri));
+        if (!string.Equals(uri.Scheme, "content", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Bu dosya konumu Android belge seçicisiyle açılamıyor.");
+
+        StartActivity(CreateSavedFolderBrowseIntent(uri));
+    }
+
+    private static global::Android.Content.Intent CreateSavedFolderBrowseIntent(
+        global::Android.Net.Uri initialUri)
+    {
+        return new global::Android.Content.Intent(global::Android.Content.Intent.ActionOpenDocument)
+            .AddCategory(global::Android.Content.Intent.CategoryOpenable)
+            .SetType("*/*")
+            .PutExtra(InitialUriExtra, initialUri)
+            .AddFlags(global::Android.Content.ActivityFlags.GrantReadUriPermission);
+    }
+
+    private void RunFolderBrowserSelfTest()
+    {
+        try
+        {
+            using var uri = global::Android.Net.Uri.Parse(
+                "content://com.android.externalstorage.documents/tree/primary%3ADownload")
+                ?? throw new InvalidOperationException("Test URI missing");
+            using var intent = CreateSavedFolderBrowseIntent(uri);
+            if (intent.Action != global::Android.Content.Intent.ActionOpenDocument ||
+                intent.Type != "*/*" || !intent.HasExtra(InitialUriExtra))
+                throw new InvalidOperationException("Folder browser intent mismatch.");
+            global::Android.Util.Log.Info("FileeFolderTest",
+                "PASS: ACTION_OPEN_DOCUMENT and initial folder URI");
+        }
+        catch (Exception ex)
+        {
+            global::Android.Util.Log.Error("FileeFolderTest", "FAIL: " + ex);
+        }
+    }
+
     private const int MediaLocationRequest = 16073;
     private TaskCompletionSource<bool>? _pendingMediaLocation;
 
@@ -151,5 +197,7 @@ public class MainActivity : AvaloniaMainActivity
             _ = Task.Run(MobileConversion.RunHeifEngineSelfTestAsync);
         if (Intent?.GetBooleanExtra("filee_batch_selftest", false) == true)
             _ = Task.Run(BatchConversionQueue.RunSelfTestAsync);
+        if (Intent?.GetBooleanExtra("filee_folder_selftest", false) == true)
+            RunFolderBrowserSelfTest();
     }
 }

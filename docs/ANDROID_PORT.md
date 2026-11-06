@@ -112,3 +112,8 @@ BitmapFactory now requests ARGB_8888 and sRGB explicitly. The decoded bitmap and
 ## 0.1.16 Photo batch queue and progress
 
 The UI now includes a batch progress bar, completed/total/succeeded/failed counters, and a scrollable per-file result log. BatchConversionQueue runs sequentially to bound memory usage and continues with later images if any photo fails. Failed partial outputs are deleted when the Android storage provider permits it. JPG, PNG and WEBP are supported batch targets; unsupported combinations now show an explicit error. A new emulator smoke test uses four jobs with two deliberate failures, verifying all items were attempted and the correct results were reported in order. Real-device batch HEIC/JPG testing is still needed.
+
+
+## 0.1.17 Compact settings, visible results and saved folder
+
+Photo settings now start collapsed with a live summary (resolution, quality or exact JPEG mode, EXIF). The user can expand them without losing selected values. Successful photo/ZIP conversions also show a result panel, and the screen scrolls to results when work completes. Batch results remain per file and include counts and errors. A saved-folder button appears when an Android SAF content URI can be obtained from a folder or output; it opens Android ACTION_OPEN_DOCUMENT using EXTRA_INITIAL_URI. Some Android providers ignore the initial URI, so browsing is best effort and not guaranteed to open the exact folder. An emulator test validates the intent structure; on-device Xiaomi navigation remains to be confirmed.

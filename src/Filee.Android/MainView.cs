@@ -23,6 +23,11 @@ public sealed class MainView : UserControl
     private readonly Avalonia.Controls.CheckBox _preserveExif;
     private readonly Avalonia.Controls.CheckBox _copyExactJpeg;
     private readonly Border _imageSettings;
+    private readonly StackPanel _settingsBody;
+    private readonly Avalonia.Controls.Button _settingsToggle, _openSavedFolder;
+    private readonly TextBlock _settingsSummary;
+    private readonly ScrollViewer _pageScroll;
+    private string? _lastSavedFolderUri;
     private readonly Border _batchPanel;
     private readonly Avalonia.Controls.ProgressBar _batchProgress;
     private readonly TextBlock _batchSummary, _batchDetails;
@@ -54,7 +59,7 @@ public sealed class MainView : UserControl
             TextWrapping = TextWrapping.Wrap,
             Foreground = Muted,
             MaxWidth = 310,
-            FontSize = 13,
+            FontSize = 14, FontWeight = FontWeight.SemiBold,
             HorizontalAlignment = HorizontalAlignment.Center
         };
         _open = Button("+ Dosya seç");
@@ -103,7 +108,10 @@ public sealed class MainView : UserControl
         _qualitySlider.PropertyChanged += (_, e) =>
         {
             if (e.Property.Name == nameof(Slider.Value))
+            {
                 _qualityLabel.Text = $"JPG / WEBP kalite: {(int)_qualitySlider.Value}";
+                RefreshSettingsSummary();
+            }
         };
         _preserveExif = new Avalonia.Controls.CheckBox
         {
@@ -123,6 +131,7 @@ public sealed class MainView : UserControl
                 _qualityLabel.Text = _copyExactJpeg.IsChecked == true
                     ? "Kalite ayarı uygulanmaz (orijinal JPG kopyalanır)"
                     : $"JPG / WEBP kalite: {(int)_qualitySlider.Value}";
+                RefreshSettingsSummary();
             }
         };
         _sizeChoice.PropertyChanged += (_, e) =>
@@ -130,6 +139,7 @@ public sealed class MainView : UserControl
             if (e.Property.Name == nameof(ComboBox.SelectedIndex) && _sizeChoice.SelectedIndex != 0)
                 _copyExactJpeg.IsChecked = false;
             _copyExactJpeg.IsEnabled = _sizeChoice.SelectedIndex == 0 && _preserveExif.IsChecked == true;
+            RefreshSettingsSummary();
         };
         _preserveExif.PropertyChanged += (_, e) =>
         {
@@ -137,21 +147,28 @@ public sealed class MainView : UserControl
             {
                 if (_preserveExif.IsChecked != true) _copyExactJpeg.IsChecked = false;
                 _copyExactJpeg.IsEnabled = _sizeChoice.SelectedIndex == 0 && _preserveExif.IsChecked == true;
+                RefreshSettingsSummary();
             }
         };
-        _imageSettings = new Border
+        _settingsToggle = Button("Fotoğraf ayarlarını göster  ▾");
+        _settingsToggle.HorizontalAlignment = HorizontalAlignment.Stretch;
+        _settingsToggle.Click += (_, _) =>
         {
-            Background = Panel, CornerRadius = new CornerRadius(20),
-            Padding = new Thickness(16),
-            Margin = new Thickness(12, 0, 12, 0),
-            IsVisible = false,
-            Child = new StackPanel
+            _settingsBody.IsVisible = !_settingsBody.IsVisible;
+            _settingsToggle.Content = _settingsBody.IsVisible
+                ? "Fotoğraf ayarlarını gizle  ▴"
+                : "Fotoğraf ayarlarını göster  ▾";
+        };
+        _settingsSummary = new TextBlock
+        {
+            Foreground = Muted, FontSize = 12,
+            TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center
+        };
+        _settingsBody = new StackPanel
+        {
+            Spacing = 10, IsVisible = false,
+            Children =
             {
-                Spacing = 10,
-                Children =
-                {
-                    new TextBlock { Text = "Fotoğraf ayarları", FontSize = 17,
-                        FontWeight = FontWeight.SemiBold, Foreground = White },
                     new TextBlock { Text = "Çıkış çözünürlüğü", Foreground = Muted },
                     _sizeChoice,
                     _qualityLabel,
@@ -168,9 +185,20 @@ public sealed class MainView : UserControl
                         Text = "PNG kayıpsız kodlanır. JPG/PNG/WEBP sRGB'ye dönüştürülür; desteklenen standart EXIF aktarılır. HEIC'in özgün ICC, HDR/10-bit ve üretici özel EXIF verileri birebir korunmaz.",
                         TextWrapping = TextWrapping.Wrap, Foreground = Muted, FontSize = 12
                     }
-                }
             }
         };
+        _imageSettings = new Border
+        {
+            Background = Panel, CornerRadius = new CornerRadius(20),
+            Padding = new Thickness(12), Margin = new Thickness(12, 0),
+            IsVisible = false,
+            Child = new StackPanel
+            {
+                Spacing = 7,
+                Children = { _settingsToggle, _settingsSummary, _settingsBody }
+            }
+        };
+        RefreshSettingsSummary();
         _batchProgress = new Avalonia.Controls.ProgressBar
         {
             Minimum = 0, Maximum = 1, Value = 0, Height = 9,
@@ -198,7 +226,7 @@ public sealed class MainView : UserControl
                 {
                     new TextBlock
                     {
-                        Text = "Toplu dönüştürme sonuçları",
+                        Text = "Dönüştürme sonuçları",
                         Foreground = White, FontSize = 17,
                         FontWeight = FontWeight.SemiBold
                     },
@@ -215,16 +243,23 @@ public sealed class MainView : UserControl
         layout.Children.Add(_donut);
         layout.Children.Add(_imageSettings);
         layout.Children.Add(_batchPanel);
+        _openSavedFolder = Button("Kaydedilen klasörü göster");
+        _openSavedFolder.IsVisible = false;
+        _openSavedFolder.HorizontalAlignment = HorizontalAlignment.Stretch;
+        _openSavedFolder.Margin = new Thickness(18, 0);
+        _openSavedFolder.Click += (_, _) => OpenSavedFolder();
+        layout.Children.Add(_openSavedFolder);
         layout.Children.Add(_status);
         layout.Children.Add(new TextBlock
         {
-            Text = "Filee Android topluluk portu • α0.1.16",
+            Text = "Filee Android topluluk portu • α0.1.17",
             Foreground = Muted, FontSize = 11, TextAlignment = TextAlignment.Center
         });
+        _pageScroll = new ScrollViewer { Content = layout };
         Content = new Border
         {
             Background = Dark,
-            Child = new ScrollViewer { Content = layout }
+            Child = _pageScroll
         };
         RenderDonut();
     }
@@ -246,6 +281,7 @@ public sealed class MainView : UserControl
         _copyExactJpeg.IsVisible = _galleryJpegUri is not null ||
             (_inputs.Count > 0 && _inputs.All(x => MobileConversion.IsJpeg(x.Name)));
         if (!_copyExactJpeg.IsVisible) _copyExactJpeg.IsChecked = false;
+        RefreshSettingsSummary();
         const double cx = 175, cy = 170;
         var ring = new Ellipse
         {
@@ -309,7 +345,7 @@ public sealed class MainView : UserControl
             _galleryJpegUri = mediaUri;
             _galleryJpegName = name;
             _inputs.Clear();
-            _batchPanel.IsVisible = false;
+            ResetResultsAndFolder();
             _sizeChoice.SelectedIndex = 0;
             _preserveExif.IsChecked = true;
             _selected.Text = name;
@@ -354,12 +390,114 @@ public sealed class MainView : UserControl
             _copyExactJpeg.IsChecked = false;
             _inputs.Clear();
             _inputs.AddRange(files);
-            _batchPanel.IsVisible = false;
+            ResetResultsAndFolder();
             _selected.Text = files.Count == 1 ? files[0].Name : $"{files.Count} dosya seçildi";
             _status.Text = "Halka üzerindeki hedef biçime dokun.";
             RenderDonut();
         }
         catch (Exception e) { _status.Text = $"Seçim başarısız: {e.Message}"; }
+    }
+
+
+    private void RefreshSettingsSummary()
+    {
+        if (_settingsSummary is null || _sizeChoice is null || _qualitySlider is null ||
+            _preserveExif is null || _copyExactJpeg is null)
+            return;
+
+        var resolution = _sizeChoice.SelectedIndex switch
+        {
+            1 => "8192 px", 2 => "4096 px", 3 => "2048 px",
+            _ => "Orijinal çözünürlük"
+        };
+        var encoder = _copyExactJpeg.IsChecked == true
+            ? "JPG aynen kopya"
+            : $"JPG/WEBP kalite {(int)_qualitySlider.Value}";
+        _settingsSummary.Text = $"{resolution} • {encoder} • " +
+            (_preserveExif.IsChecked == true ? "Standart EXIF açık" : "EXIF kapalı");
+    }
+
+    private void ResetResultsAndFolder()
+    {
+        _batchPanel.IsVisible = false;
+        _batchDetails.Text = "";
+        _lastSavedFolderUri = null;
+        _openSavedFolder.IsVisible = false;
+    }
+
+    private void RememberSavedFolder(IStorageFolder folder) =>
+        RememberSavedUri(folder.Path.ToString());
+
+    private void RememberSavedUri(string? uri)
+    {
+        // Storage Access Framework content URIs can be offered to DocumentsUI
+        // as an initial location. Other URI types cannot reliably be browsed.
+        if (!string.IsNullOrWhiteSpace(uri) &&
+            uri.StartsWith("content://", StringComparison.OrdinalIgnoreCase))
+        {
+            _lastSavedFolderUri = uri;
+            _openSavedFolder.IsVisible = true;
+        }
+    }
+
+    private async Task RememberSavedFileAsync(IStorageFile file)
+    {
+        try
+        {
+            var parent = await file.GetParentAsync();
+            if (parent is not null)
+                RememberSavedFolder(parent);
+            else
+                RememberSavedUri(file.Path.ToString());
+        }
+        catch (Exception ex)
+        {
+            global::Android.Util.Log.Warn("FileeFolder", "Output parent lookup failed: " + ex);
+            RememberSavedUri(file.Path.ToString());
+        }
+    }
+
+    private void OpenSavedFolder()
+    {
+        if (_lastSavedFolderUri is null || MainActivity.Current is null)
+        {
+            _status.Text = "Kaydedilen konum kullanılamıyor.";
+            return;
+        }
+        try
+        {
+            MainActivity.Current.OpenSavedFolderBrowser(_lastSavedFolderUri);
+            _status.Text = "Android dosya seçicisi açıldı. Sağlayıcı destekliyorsa kayıt " +
+                "konumuna gider; çıkmak için geri tuşuna bas.";
+        }
+        catch (Exception ex)
+        {
+            global::Android.Util.Log.Warn("FileeFolder", "Cannot browse output: " + ex);
+            _status.Text = "Kayıt konumu açılamadı: " + ex.Message;
+        }
+    }
+
+    private void ShowSingleResult(string name, string format)
+    {
+        _batchPanel.IsVisible = true;
+        _batchProgress.Minimum = 0;
+        _batchProgress.Maximum = 1;
+        _batchProgress.Value = 1;
+        _batchSummary.Text = "1/1 • Başarılı: 1 • Hatalı: 0";
+        _batchDetails.Text = $"✓ {name} → {format}";
+        RevealResults();
+    }
+
+    private void RevealResults()
+    {
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            if (_batchPanel.IsVisible)
+            {
+                var maxOffset = Math.Max(0, _pageScroll.Extent.Height - _pageScroll.Viewport.Height);
+                _pageScroll.Offset = new Vector(0, maxOffset);
+            }
+        });
     }
 
     private async Task Convert(string format)
@@ -393,6 +531,8 @@ public sealed class MainView : UserControl
                 _status.Text = "JPG değiştirilmeden kopyalanıyor ve doğrulanıyor…";
                 var (bytes, hash, confirmedOriginal, readbackVerified) =
                     await OriginalMediaAccess.CopyGalleryJpegExactAsync(original, output);
+                await RememberSavedFileAsync(output);
+                ShowSingleResult(_galleryJpegName, "JPG");
                 if (readbackVerified)
                 {
                     _status.Text = confirmedOriginal
@@ -415,6 +555,8 @@ public sealed class MainView : UserControl
                 if (output is null) return;
                 _status.Text = "ZIP hazırlanıyor…";
                 await MobileConversion.CreateZipAsync(_inputs, output);
+                await RememberSavedFileAsync(output);
+                ShowSingleResult("filee_archive.zip", "ZIP");
                 _status.Text = "ZIP kaydedildi ✓";
             }
 
@@ -428,6 +570,8 @@ public sealed class MainView : UserControl
                 _status.Text = "PDF dosyaları birleştiriliyor ve doğrulanıyor…";
                 var progress = new Progress<string>(message => _status.Text = message);
                 var pages = await MobileConversion.MergePdfsAsync(_inputs, output, progress);
+                RememberSavedUri(output.ToString());
+                ShowSingleResult("filee_birlesik.pdf", "PDF");
                 _status.Text = $"PDF doğrulandı ve kaydedildi: {pages} sayfa ✓";
             }
             else if (format == "AYIR" && _inputs.All(x => MobileConversion.IsPdf(x.Name)))
@@ -438,6 +582,7 @@ public sealed class MainView : UserControl
                 _status.Text = "PDF sayfaları ayrılıyor…";
                 var progress = new Progress<string>(message => _status.Text = message);
                 var pages = await MobileConversion.SplitPdfsAsync(_inputs, folders[0], progress);
+                if (pages > 0) RememberSavedFolder(folders[0]);
                 _status.Text = $"{pages} ayrı PDF oluşturuldu ✓";
             }
             else if (_inputs.All(x => MobileConversion.IsPdf(x.Name)) &&
@@ -452,6 +597,7 @@ public sealed class MainView : UserControl
                 var progress = new Progress<string>(message => _status.Text = message);
                 var converted = await MobileConversion.ConvertPdfPagesAsync(
                     _inputs, folders[0], format, progress);
+                if (converted > 0) RememberSavedFolder(folders[0]);
                 _status.Text = $"{converted} sayfa {format} olarak kaydedildi ✓";
             }
             else if (_inputs.Count == 1)
@@ -465,6 +611,8 @@ public sealed class MainView : UserControl
                 if (output is null) return;
                 _status.Text = $"{format} dönüştürülüyor…";
                 await MobileConversion.ConvertImageAsync(input, output, format, options);
+                await RememberSavedFileAsync(output);
+                ShowSingleResult(input.Name, format);
                 _status.Text = options.ExactJpegCopy
                     ? "JPG dosyası değiştirilmeden kopyalandı ✓"
                     : "Dönüştürme tamamlandı ✓";
@@ -487,6 +635,7 @@ public sealed class MainView : UserControl
                 _batchSummary.Text = $"0/{_inputs.Count} • Başarılı: 0 • Hatalı: 0";
                 _batchDetails.Text = "";
                 var detailLines = new List<string>();
+                RevealResults();
 
                 var summary = await BatchConversionQueue.RunAsync(
                     _inputs,
@@ -527,6 +676,8 @@ public sealed class MainView : UserControl
                         _batchDetails.Text = string.Join("\n", detailLines);
                     });
 
+                if (summary.Succeeded > 0) RememberSavedFolder(folders[0]);
+                RevealResults();
                 _status.Text = summary.Failed == 0
                     ? $"Tüm {summary.Total} fotoğraf dönüştürüldü ✓"
                     : $"İşlem tamamlandı: {summary.Succeeded} başarılı, {summary.Failed} hatalı. " +
