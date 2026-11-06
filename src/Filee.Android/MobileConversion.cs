@@ -17,10 +17,15 @@ internal static class MobileConversion
 {
     private static readonly HashSet<string> ImageExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
-        ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic", ".heif"
+        ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic", ".heif", ".hif"
     };
 
     public static bool IsImage(string name) => ImageExtensions.Contains(Path.GetExtension(name));
+    public static bool IsHeif(string name) =>
+        Path.GetExtension(name).Equals(".heic", StringComparison.OrdinalIgnoreCase) ||
+        Path.GetExtension(name).Equals(".heif", StringComparison.OrdinalIgnoreCase) ||
+        Path.GetExtension(name).Equals(".hif", StringComparison.OrdinalIgnoreCase);
+
     public static bool IsJpeg(string name) =>
         Path.GetExtension(name).Equals(".jpg", StringComparison.OrdinalIgnoreCase) ||
         Path.GetExtension(name).Equals(".jpeg", StringComparison.OrdinalIgnoreCase);
@@ -212,7 +217,11 @@ internal static class MobileConversion
         int width = bounds.OutWidth;
         int height = bounds.OutHeight;
         if (width <= 0 || height <= 0)
-            throw new InvalidDataException("Android bu görüntü biçimini çözemedi.");
+            throw IsHeif(input)
+                ? new NotSupportedException(
+                    "Bu HEIC/HEIF/HIF dosyası Android tarafından çözülemedi. " +
+                    "10-bit 4:2:2 veya HDR gibi bazı profillerde cihazın codec desteği gerekebilir.")
+                : new InvalidDataException("Android bu görüntü biçimini çözemedi.");
         if (opts.MaxLongEdge == 0 && (long)width * height > 60_000_000L)
             throw new InvalidDataException("Fotoğraf 60 MP üzerinde. Boyutu 8192, 4096 veya 2048 olarak seçin.");
 
@@ -227,7 +236,11 @@ internal static class MobileConversion
         try
         {
             current = BitmapFactory.DecodeFile(input, decodeOptions)
-                ?? throw new InvalidDataException("Görüntü çözümlenemedi.");
+                ?? throw (IsHeif(input)
+                    ? new NotSupportedException(
+                        "HEIC/HEIF/HIF görüntüsünün kod çözücüsü bulunamadı. " +
+                        "Bu cihaz dosyanın codec profilini desteklemiyor olabilir.")
+                    : new InvalidDataException("Görüntü çözümlenemedi."));
         }
         catch (OutOfMemoryException)
         {
@@ -368,6 +381,55 @@ internal static class MobileConversion
         {
             foreach (var f in new[] { input, jpg, png, webp, originalCopy })
                 if (File.Exists(f)) File.Delete(f);
+        }
+    }
+
+    public static async Task RunHeifEngineSelfTestAsync()
+    {
+        var assembly = typeof(MobileConversion).Assembly;
+        var resources = assembly.GetManifestResourceNames();
+        var output = TempImagePath(".jpg");
+        var outputPng = TempImagePath(".png");
+        var basic = TempImagePath(".heic");
+        var rotated = TempImagePath(".heic");
+        try
+        {
+            async Task LoadResourceAsync(string token, string path)
+            {
+                var key = resources.SingleOrDefault(name =>
+                    name.EndsWith(token, StringComparison.OrdinalIgnoreCase))
+                    ?? throw new FileNotFoundException("HEIC test fixture APK'da bulunamadı: " + token);
+                await using var source = assembly.GetManifestResourceStream(key)
+                    ?? throw new IOException("HEIC test fixture açılamadı: " + token);
+                await using var destination = File.Create(path);
+                await source.CopyToAsync(destination);
+            }
+
+            await LoadResourceAsync("basic-8bit-srgb.heic", basic);
+            await LoadResourceAsync("orientation-6.heic", rotated);
+            await Task.Run(() =>
+            {
+                ConvertLocalImage(basic, output, "JPG", new ImageOptions(95, 0, false));
+                AssertSize(output, 1600, 1200);
+                ConvertLocalImage(basic, outputPng, "PNG", new ImageOptions(90, 800, false));
+                AssertSize(outputPng, 800, 600);
+                // The HEIF transform metadata rotates stored 800x1200 into
+                // display 1200x800. Do not rotate the decoded image twice.
+                File.Delete(output);
+                ConvertLocalImage(rotated, output, "JPG", new ImageOptions(95, 0, true));
+                AssertSize(output, 1200, 800);
+            });
+            global::Android.Util.Log.Info("FileeHeifTest",
+                "PASS: HEIC->JPG 1600x1200; HEIC->PNG 800x600; HEIC orientation6->JPG 1200x800");
+        }
+        catch (Exception ex)
+        {
+            global::Android.Util.Log.Error("FileeHeifTest", "FAIL: " + ex);
+        }
+        finally
+        {
+            foreach (var path in new[] { output, outputPng, basic, rotated })
+                if (File.Exists(path)) File.Delete(path);
         }
     }
 

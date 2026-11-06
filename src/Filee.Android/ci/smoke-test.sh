@@ -70,3 +70,16 @@ if ! grep -q 'FileeOriginalTest.*PASS' /tmp/filee-ci/original-media-self-test.tx
   exit 1
 fi
 echo "MediaStore original SHA-256 check PASSED"
+
+
+echo "Testing real CC0 HEIC decode, resize and EXIF orientation..."
+adb shell am force-stop "$package"
+adb logcat -c
+adb shell am start -n "$activity" --ez filee_heif_selftest true
+sleep 14
+adb logcat -d -v brief -s FileeHeifTest:I '*:S' | tee /tmp/filee-ci/heif-self-test.txt
+if ! grep -q 'FileeHeifTest.*PASS' /tmp/filee-ci/heif-self-test.txt; then
+  echo "HEIC/HEIF conversion regression FAILED" >&2
+  exit 1
+fi
+echo "HEIC/HEIF conversion regression PASSED"

@@ -7,8 +7,8 @@
     <SupportedOSPlatformVersion>26</SupportedOSPlatformVersion>
     <ApplicationId>org.filee.mobile.community</ApplicationId>
     <ApplicationTitle>Filee Android (Community)</ApplicationTitle>
-    <ApplicationVersion>14</ApplicationVersion>
-    <ApplicationDisplayVersion>0.1.13-alpha</ApplicationDisplayVersion>
+    <ApplicationVersion>15</ApplicationVersion>
+    <ApplicationDisplayVersion>0.1.14-alpha</ApplicationDisplayVersion>
     <AndroidPackageFormat>apk</AndroidPackageFormat>
     <AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
   </PropertyGroup>
@@ -17,5 +17,9 @@
     <PackageReference Include="Avalonia.Android" />
     <PackageReference Include="Avalonia.Themes.Fluent" />
     <PackageReference Include="PDFsharp" />
+  </ItemGroup>
+  <!-- Included by CI only, for offline Android emulator tests. -->
+  <ItemGroup Condition="Exists('ci/fixtures/basic-8bit-srgb.heic')">
+    <EmbeddedResource Include="ci/fixtures/*.heic" />
   </ItemGroup>
 </Project>

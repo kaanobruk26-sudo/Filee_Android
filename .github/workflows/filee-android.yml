@@ -30,6 +30,17 @@ jobs:
           dotnet-version: '10.0.x'
       - name: Install Android workload
         run: dotnet workload install android
+      - name: Download CC0 HEIC regression fixtures
+        run: |
+          mkdir -p src/Filee.Android/ci/fixtures
+          curl --fail --location --retry 3 --silent --show-error \
+            https://heic.fyi/samples/basic-8bit-srgb.heic \
+            -o src/Filee.Android/ci/fixtures/basic-8bit-srgb.heic
+          curl --fail --location --retry 3 --silent --show-error \
+            https://heic.fyi/samples/orientation-6.heic \
+            -o src/Filee.Android/ci/fixtures/orientation-6.heic
+          echo "3fe7d32e5568f8bfd6b5d3290e61ac9b964d08464d388fa064f69cddddfee82c  src/Filee.Android/ci/fixtures/basic-8bit-srgb.heic" | sha256sum -c -
+          echo "80b615ae433d7ec53e9aaaeee081ecd11c0d9931350da13d6ce4e2b363d12c12  src/Filee.Android/ci/fixtures/orientation-6.heic" | sha256sum -c -
       - name: Build APK
         run: dotnet publish src/Filee.Android/Filee.Android.csproj -c Release -p:AndroidPackageFormat=apk
       - name: Upload APK for testing
