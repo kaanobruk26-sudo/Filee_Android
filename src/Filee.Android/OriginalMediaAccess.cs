@@ -336,9 +336,15 @@ internal static class OriginalMediaAccess
             try
             {
                 await CopyProviderStreamAsync(uri, generic);
-                if (!SHA256.HashData(File.ReadAllBytes(local)).AsSpan().SequenceEqual(
-                    SHA256.HashData(File.ReadAllBytes(generic))))
-                    throw new InvalidDataException("Generic provider byte-copy did not match.");
+                // A generic stream may already be location-redacted even if
+                // the underlying local original is not. Compare provider
+                // output against the exact bytes the provider itself returns.
+                using var providerStream = resolver.OpenInputStream(uri)
+                    ?? throw new IOException("Generic provider stream unavailable.");
+                using var copiedStream = File.OpenRead(generic);
+                if (!SHA256.HashData(providerStream).AsSpan().SequenceEqual(
+                    SHA256.HashData(copiedStream)))
+                    throw new InvalidDataException("Generic provider stream copy changed bytes.");
             }
             finally
             {
