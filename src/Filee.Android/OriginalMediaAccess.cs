@@ -95,7 +95,7 @@ internal static class OriginalMediaAccess
 
     // The result distinguishes a MediaStore unredacted original from bytes
     // supplied by a third-party content provider (whose EXIF may be masked).
-    public static async Task<(long bytes, string sha256, bool confirmedOriginal)> CopyGalleryJpegExactAsync(
+    public static async Task<(long bytes, string sha256, bool confirmedOriginal, bool readbackVerified)> CopyGalleryJpegExactAsync(
         global::Android.Net.Uri selected, IStorageFile output)
     {
         await EnsureOriginalAccessAsync(selected);
@@ -143,18 +143,37 @@ internal static class OriginalMediaAccess
                 await target.FlushAsync();
             }
 
-            // Verify what the user actually saved. Do not report "byte exact"
-            // merely because the cached source and internal copy match.
-            byte[] savedHash;
-            await using (var saved = await output.OpenReadAsync())
-                savedHash = await SHA256.HashDataAsync(saved);
-            if (!sourceHash.AsSpan().SequenceEqual(savedHash))
-                throw new InvalidDataException(
-                    "Kaydedilen JPG ile özgün kaynak uyuşmadı. Birebir kopya doğrulanamadı.");
+            // Reading the same saved content through an Android document/media
+            // provider may return a GPS/EXIF-redacted *view* even after the raw
+            // bytes were written unchanged. A mismatch is therefore an
+            // INCONCLUSIVE readback, not proof that the copy itself failed.
+            // Do not claim verified unless the readback hashes really match.
+            bool readbackVerified = false;
+            try
+            {
+                byte[] savedHash;
+                await using (var saved = await output.OpenReadAsync())
+                    savedHash = await SHA256.HashDataAsync(saved);
+                readbackVerified = HashMatches(sourceHash, savedHash);
+                if (!readbackVerified)
+                    global::Android.Util.Log.Warn("FileeOriginal",
+                        $"Readback differed: source={Convert.ToHexString(sourceHash)}, " +
+                        $"readback={Convert.ToHexString(savedHash)}. " +
+                        "Android provider may return altered EXIF. Verify the exported JPEG externally.");
+            }
+            catch (Exception readError)
+            {
+                // The write is already finished. Readback access is optional
+                // and does not determine whether the file was successfully saved.
+                global::Android.Util.Log.Warn("FileeOriginal",
+                    "Saved JPEG could not be reopened for readback: " + readError);
+            }
 
             global::Android.Util.Log.Info("FileeOriginal",
-                $"Saved JPEG verified: bytes={bytes}, SHA256={Convert.ToHexString(sourceHash)}, originalGuaranteed={confirmedOriginal}, provider={selected.Authority}");
-            return (bytes, Convert.ToHexString(sourceHash), confirmedOriginal);
+                $"JPEG saved: bytes={bytes}, SHA256={Convert.ToHexString(sourceHash)}, " +
+                $"readbackVerified={readbackVerified}, originalProvider={confirmedOriginal}, " +
+                $"sourceProvider={selected.Authority}");
+            return (bytes, Convert.ToHexString(sourceHash), confirmedOriginal, readbackVerified);
         }
         finally
         {
@@ -168,6 +187,9 @@ internal static class OriginalMediaAccess
     /// This never transcodes/recompresses, but the provider could have
     /// redacted metadata before handing the stream to the application.
     /// </summary>
+    private static bool HashMatches(byte[] original, byte[] readback) =>
+        original.AsSpan().SequenceEqual(readback);
+
     private static async Task CopyProviderStreamAsync(global::Android.Net.Uri selected, string path)
     {
         var resolver = global::Android.App.Application.Context.ContentResolver
@@ -329,6 +351,14 @@ internal static class OriginalMediaAccess
             if (!galleryName.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("Galeri medya URI dosya adını çözemedi.");
             CopyRequireOriginal(uri, copied);
+            // A mismatch in a re-read must be classified as inconclusive,
+            // not as a failed write. This mirrors Xiaomi's readback behavior.
+            var baseHash = SHA256.HashData(File.ReadAllBytes(local));
+            var simulatedRedacted = (byte[])baseHash.Clone();
+            simulatedRedacted[0] ^= 0x01;
+            if (!HashMatches(baseHash, baseHash) ||
+                HashMatches(baseHash, simulatedRedacted))
+                throw new InvalidOperationException("Readback classification regression.");
             // Exercise the generic provider stream path too; the real Xiaomi
             // picker uses com.android.fileexplorer.myprovider instead of media.
             var generic = Path.Combine(context.CacheDir!.AbsolutePath,

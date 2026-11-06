@@ -173,7 +173,7 @@ public sealed class MainView : UserControl
         layout.Children.Add(_status);
         layout.Children.Add(new TextBlock
         {
-            Text = "Filee Android topluluk portu • α0.1.12",
+            Text = "Filee Android topluluk portu • α0.1.13",
             Foreground = Muted, FontSize = 11, TextAlignment = TextAlignment.Center
         });
         Content = new Border
@@ -344,12 +344,22 @@ public sealed class MainView : UserControl
                 });
                 if (output is null) return;
                 _status.Text = "JPG değiştirilmeden kopyalanıyor ve doğrulanıyor…";
-                var (bytes, hash, confirmedOriginal) =
+                var (bytes, hash, confirmedOriginal, readbackVerified) =
                     await OriginalMediaAccess.CopyGalleryJpegExactAsync(original, output);
-                _status.Text = confirmedOriginal
-                    ? $"Özgün JPEG doğrulandı ✓ {bytes:N0} bayt • SHA-256 {hash[..12]}…"
-                    : $"Seçilen JPG verisi aynen kaydedildi ✓ {bytes:N0} bayt • SHA-256 {hash[..12]}… " +
-                      "Sağlayıcının özgün GPS/EXIF verisini verdiği garanti edilemez.";
+                if (readbackVerified)
+                {
+                    _status.Text = confirmedOriginal
+                        ? $"Özgün JPEG birebir doğrulandı ✓ {bytes:N0} bayt"
+                        : $"Seçilen JPEG birebir doğrulandı ✓ {bytes:N0} bayt. " +
+                          "Sağlayıcının gizlemiş olabileceği EXIF ayrı konudur.";
+                }
+                else
+                {
+                    _status.Text = $"JPG kaydedildi ✓ {bytes:N0} bayt. " +
+                        "Android yeniden okumada farklı veri gösterdi; birebirlik uygulama içinde " +
+                        "doğrulanamadı. Dosyaları ZIP olarak karşılaştır. SHA-256: " +
+                        hash[..12] + "…";
+                }
             }
             else if (format == "ZIP")
             {
