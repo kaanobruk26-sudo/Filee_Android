@@ -43,61 +43,271 @@ internal static class MobileConversion
         return $"{safe}_filee{(index < 0 ? "" : $"_{index + 1}")}.{format.ToLowerInvariant()}";
     }
 
-    public static async Task ConvertImageAsync(IStorageFile input, IStorageFile output, string target)
+    public readonly record struct ImageOptions(int Quality, int MaxLongEdge, bool PreserveExif)
     {
-        if (!IsImage(input.Name)) throw new NotSupportedException("Bu dosya görüntü olarak açılamıyor.");
+        public static ImageOptions Default => new(92, 0, true);
+    }
 
-        using var bitmap = await Task.Run(async () =>
+    // Safe, widely recognized EXIF fields only. GPS location, face regions,
+    // maker notes and full proprietary metadata are not copied.
+    private static readonly string[] ExifFields =
+    [
+        "Make", "Model", "DateTime", "DateTimeOriginal", "DateTimeDigitized",
+        "ExposureTime", "FNumber", "ISOSpeedRatings", "PhotographicSensitivity",
+        "FocalLength", "Flash", "WhiteBalance", "LensModel", "Artist", "Copyright"
+    ];
+
+    private static string TempImagePath(string extension)
+    {
+        var dir = global::Android.App.Application.Context.CacheDir?.AbsolutePath
+            ?? throw new IOException("Android önbelleğine ulaşılamıyor.");
+        return Path.Combine(dir, "filee_img_" + Guid.NewGuid().ToString("N") + extension);
+    }
+
+    public static async Task ConvertImageAsync(
+        IStorageFile input, IStorageFile output, string target, ImageOptions? settings = null)
+    {
+        if (!IsImage(input.Name))
+            throw new NotSupportedException("Bu dosya bir görüntü değil.");
+        var source = TempImagePath(Path.GetExtension(input.Name));
+        var result = TempImagePath("." + target.ToLowerInvariant());
+        try
         {
-            await using var boundsStream = await input.OpenReadAsync();
-            using var bounds = new BitmapFactory.Options { InJustDecodeBounds = true };
-            BitmapFactory.DecodeStream(boundsStream, null, bounds);
-
-            var sample = 1;
-            while (bounds.OutWidth / sample > 4096 || bounds.OutHeight / sample > 4096)
-                sample *= 2;
-
-            await using var imageStream = await input.OpenReadAsync();
-            using var options = new BitmapFactory.Options { InSampleSize = sample };
-            return BitmapFactory.DecodeStream(imageStream, null, options)
-                ?? throw new InvalidDataException("Android görüntüyü açamadı; codec desteği cihaza bağlı.");
-        });
-
-        await using var destination = await output.OpenWriteAsync();
-        await Task.Run(() =>
+            await using (var inputStream = await input.OpenReadAsync())
+            await using (var sourceStream = new FileStream(source, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                await inputStream.CopyToAsync(sourceStream);
+            await Task.Run(() => ConvertLocalImage(source, result, target, settings ?? ImageOptions.Default));
+            await using var outputStream = await output.OpenWriteAsync();
+            await using var resultStream = File.OpenRead(result);
+            await resultStream.CopyToAsync(outputStream);
+            await outputStream.FlushAsync();
+        }
+        finally
         {
-            if (target == "PDF")
+            if (File.Exists(source)) File.Delete(source);
+            if (File.Exists(result)) File.Delete(result);
+        }
+    }
+
+    private static int ReadOrientation(string source)
+    {
+        try
+        {
+            using var exif = new global::Android.Media.ExifInterface(source);
+            return exif.GetAttributeInt("Orientation", 1);
+        }
+        catch (Exception e)
+        {
+            global::Android.Util.Log.Warn("FileeImage", "EXIF orientation unreadable: " + e.Message);
+            return 1;
+        }
+    }
+
+    private static Bitmap ApplyOrientation(Bitmap bitmap, int orientation)
+    {
+        if (orientation <= 1 || orientation > 8) return bitmap;
+        using var matrix = new global::Android.Graphics.Matrix();
+        switch (orientation)
+        {
+            case 2: matrix.SetScale(-1, 1); break;
+            case 3: matrix.SetRotate(180); break;
+            case 4: matrix.SetScale(1, -1); break;
+            case 5: matrix.SetRotate(90); matrix.PostScale(-1, 1); break;
+            case 6: matrix.SetRotate(90); break;
+            case 7: matrix.SetRotate(270); matrix.PostScale(-1, 1); break;
+            case 8: matrix.SetRotate(270); break;
+        }
+        return Bitmap.CreateBitmap(bitmap, 0, 0, bitmap.Width, bitmap.Height, matrix, true)
+            ?? throw new InvalidDataException("Fotoğrafın yönü düzeltilemedi.");
+    }
+
+    private static void CopySafeExif(string source, string target)
+    {
+        try
+        {
+            using var src = new global::Android.Media.ExifInterface(source);
+            using var dst = new global::Android.Media.ExifInterface(target);
+            int copied = 0;
+            foreach (var tag in ExifFields)
             {
-                using var pdf = new PdfDocument();
-                var pageInfo = new PdfDocument.PageInfo.Builder(bitmap.Width, bitmap.Height, 1).Create();
-                var page = pdf.StartPage(pageInfo);
-                page.Canvas!.DrawBitmap(bitmap, 0, 0, null);
-                pdf.FinishPage(page);
-                pdf.WriteTo(destination);
-                return;
+                var value = src.GetAttribute(tag);
+                if (string.IsNullOrWhiteSpace(value)) continue;
+                dst.SetAttribute(tag, value);
+                copied++;
+            }
+            // Pixels were physically rotated before encoding.
+            dst.SetAttribute("Orientation", "1");
+            dst.SaveAttributes();
+            global::Android.Util.Log.Info("FileeImage", $"Preserved {copied} standard EXIF fields (no GPS).");
+        }
+        catch (Exception e)
+        {
+            // Invalid or unsupported metadata must not silently destroy an
+            // otherwise successfully encoded photograph.
+            global::Android.Util.Log.Warn("FileeImage", "Partial/unsupported EXIF: " + e);
+        }
+    }
+
+    private static void ConvertLocalImage(string input, string output, string target, ImageOptions opts)
+    {
+        if (target is not ("JPG" or "PNG" or "WEBP"))
+            throw new NotSupportedException("Görsel hedefi desteklenmiyor: " + target);
+        if (opts.Quality is < 60 or > 100 || opts.MaxLongEdge < 0)
+            throw new ArgumentOutOfRangeException(nameof(opts));
+
+        using var bounds = new BitmapFactory.Options { InJustDecodeBounds = true, InScaled = false };
+        BitmapFactory.DecodeFile(input, bounds);
+        int width = bounds.OutWidth;
+        int height = bounds.OutHeight;
+        if (width <= 0 || height <= 0)
+            throw new InvalidDataException("Android bu görüntü biçimini çözemedi.");
+        if (opts.MaxLongEdge == 0 && (long)width * height > 60_000_000L)
+            throw new InvalidDataException("Fotoğraf 60 MP üzerinde. Boyutu 8192, 4096 veya 2048 olarak seçin.");
+
+        int maxSide = Math.Max(width, height);
+        int requested = opts.MaxLongEdge <= 0 ? maxSide : Math.Min(maxSide, opts.MaxLongEdge);
+        int sample = 1;
+        while (maxSide / (sample * 2) >= requested && sample < 64)
+            sample *= 2;
+
+        using var decodeOptions = new BitmapFactory.Options { InSampleSize = sample, InScaled = false };
+        Bitmap current;
+        try
+        {
+            current = BitmapFactory.DecodeFile(input, decodeOptions)
+                ?? throw new InvalidDataException("Görüntü çözümlenemedi.");
+        }
+        catch (OutOfMemoryException)
+        {
+            throw new InvalidDataException("Bellek yetersiz. Daha küçük çözünürlük seçin.");
+        }
+
+        try
+        {
+            int orientation = ReadOrientation(input);
+            if (orientation != 1)
+            {
+                var corrected = ApplyOrientation(current, orientation);
+                if (!ReferenceEquals(current, corrected))
+                {
+                    current.Dispose();
+                    current = corrected;
+                }
+            }
+
+            int currentLong = Math.Max(current.Width, current.Height);
+            if (opts.MaxLongEdge > 0 && currentLong > opts.MaxLongEdge)
+            {
+                double ratio = (double)opts.MaxLongEdge / currentLong;
+                var scaled = Bitmap.CreateScaledBitmap(current,
+                    Math.Max(1, (int)Math.Round(current.Width * ratio)),
+                    Math.Max(1, (int)Math.Round(current.Height * ratio)), true)
+                    ?? throw new OutOfMemoryException("Görüntü ölçeklenemedi.");
+                if (!ReferenceEquals(current, scaled))
+                {
+                    current.Dispose();
+                    current = scaled;
+                }
             }
 
             var codec = target switch
             {
                 "JPG" => Bitmap.CompressFormat.Jpeg!,
                 "PNG" => Bitmap.CompressFormat.Png!,
-                "WEBP" => Bitmap.CompressFormat.WebpLossy!,
-                _ => throw new NotSupportedException($"Bilinmeyen hedef: {target}")
+                _ => Bitmap.CompressFormat.WebpLossy!
             };
 
-            // JPEG saydamlık desteklemez. Saydam arka planı beyaza düzleştir.
-            if (target == "JPG" && bitmap.HasAlpha)
+            using (var dest = new FileStream(output, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             {
-                using var flattened = Bitmap.CreateBitmap(bitmap.Width, bitmap.Height, Bitmap.Config.Argb8888!);
-                using var canvas = new Canvas(flattened);
-                canvas.DrawColor(Color.White);
-                canvas.DrawBitmap(bitmap, 0, 0, null);
-                if (!flattened.Compress(codec, 90, destination))
-                    throw new IOException("JPEG kodlanamadı.");
+                if (target == "JPG" && current.HasAlpha)
+                {
+                    using var flattened = Bitmap.CreateBitmap(current.Width, current.Height, Bitmap.Config.Argb8888!)
+                        ?? throw new OutOfMemoryException("Arka plan oluşturulamadı.");
+                    using var canvas = new Canvas(flattened);
+                    canvas.DrawColor(Color.White);
+                    canvas.DrawBitmap(current, 0, 0, null);
+                    if (!flattened.Compress(codec, opts.Quality, dest))
+                        throw new IOException("JPEG kaydedilemedi.");
+                }
+                else if (!current.Compress(codec, opts.Quality, dest))
+                    throw new IOException(target + " kaydedilemedi.");
+                dest.Flush();
             }
-            else if (!bitmap.Compress(codec, 90, destination))
-                throw new IOException($"{target} kodlanamadı.");
-        });
+
+            if (opts.PreserveExif)
+                CopySafeExif(input, output);
+
+            // Check the encoded image locally before it is copied to SAF.
+            using var verified = new BitmapFactory.Options { InJustDecodeBounds = true, InScaled = false };
+            BitmapFactory.DecodeFile(output, verified);
+            if (verified.OutWidth != current.Width || verified.OutHeight != current.Height)
+                throw new InvalidDataException("Oluşturulan görüntünün boyutları doğrulanamadı.");
+            global::Android.Util.Log.Info("FileeImage",
+                $"Converted {width}x{height} to {verified.OutWidth}x{verified.OutHeight}, {target}");
+        }
+        finally
+        {
+            current.Dispose();
+        }
+    }
+
+    public static async Task RunImageEngineSelfTestAsync()
+    {
+        var input = TempImagePath(".jpg");
+        var jpg = TempImagePath(".jpg");
+        var png = TempImagePath(".png");
+        var webp = TempImagePath(".webp");
+        try
+        {
+            using (var b = Bitmap.CreateBitmap(240, 120, Bitmap.Config.Argb8888!))
+            using (var stream = new FileStream(input, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                b.EraseColor(Color.Green);
+                if (!b.Compress(Bitmap.CompressFormat.Jpeg!, 90, stream))
+                    throw new IOException("Örnek JPEG üretilemedi.");
+            }
+            using (var exif = new global::Android.Media.ExifInterface(input))
+            {
+                exif.SetAttribute("Orientation", "6");
+                exif.SetAttribute("Make", "FileeTest");
+                exif.SetAttribute("Model", "AndroidEmulator");
+                exif.SaveAttributes();
+            }
+
+            await Task.Run(() =>
+            {
+                ConvertLocalImage(input, jpg, "JPG", new ImageOptions(95, 0, true));
+                using (var e = new global::Android.Media.ExifInterface(jpg))
+                {
+                    if (e.GetAttribute("Make") != "FileeTest" || e.GetAttributeInt("Orientation", 0) != 1)
+                        throw new InvalidDataException("JPEG EXIF korunamadı.");
+                }
+                AssertSize(jpg, 120, 240);
+                ConvertLocalImage(input, png, "PNG", new ImageOptions(90, 160, false));
+                AssertSize(png, 80, 160);
+                ConvertLocalImage(input, webp, "WEBP", new ImageOptions(77, 120, false));
+                AssertSize(webp, 60, 120);
+            });
+            global::Android.Util.Log.Info("FileeImageTest", "PASS: JPEG EXIF and rotation; PNG 80x160; WEBP 60x120");
+        }
+        catch (Exception e)
+        {
+            global::Android.Util.Log.Error("FileeImageTest", "FAIL: " + e);
+        }
+        finally
+        {
+            foreach (var f in new[] { input, jpg, png, webp })
+                if (File.Exists(f)) File.Delete(f);
+        }
+    }
+
+    private static void AssertSize(string image, int width, int height)
+    {
+        using var options = new BitmapFactory.Options { InJustDecodeBounds = true };
+        BitmapFactory.DecodeFile(image, options);
+        if (options.OutWidth != width || options.OutHeight != height)
+            throw new InvalidDataException(
+                $"Expected {width}x{height}, got {options.OutWidth}x{options.OutHeight}");
     }
 
 

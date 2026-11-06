@@ -14,6 +14,11 @@ public sealed class MainView : UserControl
     private readonly TextBlock _selected, _status;
     private readonly Canvas _donut;
     private readonly Avalonia.Controls.Button _open;
+    private readonly ComboBox _sizeChoice;
+    private readonly Slider _qualitySlider;
+    private readonly TextBlock _qualityLabel;
+    private readonly CheckBox _preserveExif;
+    private readonly Border _imageSettings;
     private bool _busy;
 
     private static readonly IBrush Dark = Brush("#13141E");
@@ -74,11 +79,57 @@ public sealed class MainView : UserControl
             Foreground = White, FontSize = 16, FontWeight = FontWeight.SemiBold,
             TextAlignment = TextAlignment.Center, Margin = new Thickness(0, 12, 0, 0)
         });
+
+        _sizeChoice = new ComboBox
+        {
+            ItemsSource = new[] { "Orijinal çözünürlük (en fazla 60 MP)", "En fazla 8192 px", "En fazla 4096 px", "En fazla 2048 px" },
+            SelectedIndex = 0, HorizontalAlignment = HorizontalAlignment.Stretch,
+            Foreground = White
+        };
+        _qualityLabel = new TextBlock { Text = "JPG / WEBP kalite: 92", Foreground = White, FontSize = 14 };
+        _qualitySlider = new Slider { Minimum = 60, Maximum = 100, Value = 92, TickFrequency = 1 };
+        _qualitySlider.PropertyChanged += (_, e) =>
+        {
+            if (e.Property.Name == nameof(Slider.Value))
+                _qualityLabel.Text = $"JPG / WEBP kalite: {(int)_qualitySlider.Value}";
+        };
+        _preserveExif = new CheckBox
+        {
+            Content = "EXIF çekim bilgilerini koru (GPS hariç)",
+            IsChecked = true, Foreground = Muted
+        };
+        _imageSettings = new Border
+        {
+            Background = Panel, CornerRadius = new CornerRadius(20),
+            Padding = new Thickness(16),
+            Margin = new Thickness(12, 0, 12, 0),
+            IsVisible = false,
+            Child = new StackPanel
+            {
+                Spacing = 10,
+                Children =
+                {
+                    new TextBlock { Text = "Fotoğraf ayarları", FontSize = 17,
+                        FontWeight = FontWeight.SemiBold, Foreground = White },
+                    new TextBlock { Text = "Çıkış çözünürlüğü", Foreground = Muted },
+                    _sizeChoice,
+                    _qualityLabel,
+                    _qualitySlider,
+                    _preserveExif,
+                    new TextBlock
+                    {
+                        Text = "PNG kayıpsızdır. HDR/10-bit ve tüm üretici özel EXIF alanları korunmaz.",
+                        TextWrapping = TextWrapping.Wrap, Foreground = Muted, FontSize = 12
+                    }
+                }
+            }
+        };
         layout.Children.Add(_donut);
+        layout.Children.Add(_imageSettings);
         layout.Children.Add(_status);
         layout.Children.Add(new TextBlock
         {
-            Text = "Filee Android topluluk portu • α0.1.6",
+            Text = "Filee Android topluluk portu • α0.1.7",
             Foreground = Muted, FontSize = 11, TextAlignment = TextAlignment.Center
         });
         Content = new Border
@@ -101,6 +152,7 @@ public sealed class MainView : UserControl
     private void RenderDonut()
     {
         _donut.Children.Clear();
+        _imageSettings.IsVisible = _inputs.Count > 0 && _inputs.All(x => MobileConversion.IsImage(x.Name));
         const double cx = 175, cy = 170;
         var ring = new Ellipse
         {
@@ -142,6 +194,18 @@ public sealed class MainView : UserControl
             Canvas.SetTop(target, cy + 120 * Math.Sin(a) - 24);
             _donut.Children.Add(target);
         }
+    }
+
+    private MobileConversion.ImageOptions CurrentImageOptions()
+    {
+        int max = _sizeChoice.SelectedIndex switch
+        {
+            1 => 8192,
+            2 => 4096,
+            3 => 2048,
+            _ => 0
+        };
+        return new MobileConversion.ImageOptions((int)_qualitySlider.Value, max, _preserveExif.IsChecked == true);
     }
 
     private async Task PickFiles()
@@ -227,7 +291,7 @@ public sealed class MainView : UserControl
                 { Title = "Dosyayı kaydet", SuggestedFileName = MobileConversion.OutputFileName(input.Name, format) });
                 if (output is null) return;
                 _status.Text = $"{format} dönüştürülüyor…";
-                await MobileConversion.ConvertImageAsync(input, output, format);
+                await MobileConversion.ConvertImageAsync(input, output, format, CurrentImageOptions());
                 _status.Text = "Dönüştürme tamamlandı ✓";
             }
             else
@@ -239,7 +303,7 @@ public sealed class MainView : UserControl
                 {
                     _status.Text = $"Dönüştürülüyor: {i + 1}/{_inputs.Count}";
                     var target = await folders[0].CreateFileAsync(MobileConversion.OutputFileName(_inputs[i].Name, format, i));
-                    await MobileConversion.ConvertImageAsync(_inputs[i], target, format);
+                    await MobileConversion.ConvertImageAsync(_inputs[i], target, format, CurrentImageOptions());
                 }
                 _status.Text = $"{_inputs.Count} dosya kaydedildi ✓";
             }

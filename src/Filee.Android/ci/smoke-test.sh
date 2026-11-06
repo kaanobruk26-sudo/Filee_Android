@@ -43,3 +43,16 @@ if ! grep -q 'FileePdfTest.*PASS' /tmp/filee-ci/pdf-self-test.txt; then
   exit 1
 fi
 echo "Android PDF engine regression check PASSED"
+
+
+echo "Testing native image conversion, EXIF, orientation, dimensions..."
+adb shell am force-stop "$package"
+adb logcat -c
+adb shell am start -n "$activity" --ez filee_image_selftest true
+sleep 12
+adb logcat -d -v brief -s FileeImageTest:I '*:S' | tee /tmp/filee-ci/image-self-test.txt
+if ! grep -q 'FileeImageTest.*PASS' /tmp/filee-ci/image-self-test.txt; then
+  echo "Android image conversion regression check FAILED" >&2
+  exit 1
+fi
+echo "Android image conversion regression check PASSED"

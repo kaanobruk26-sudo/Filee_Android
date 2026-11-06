@@ -64,5 +64,7 @@ public class MainActivity : AvaloniaMainActivity
         Current = this;
         if (Intent?.GetBooleanExtra("filee_pdf_selftest", false) == true)
             _ = Task.Run(MobileConversion.RunPdfEngineSelfTest);
+        if (Intent?.GetBooleanExtra("filee_image_selftest", false) == true)
+            _ = Task.Run(MobileConversion.RunImageEngineSelfTestAsync);
     }
 }
