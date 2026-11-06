@@ -67,7 +67,7 @@ internal static class OriginalMediaAccess
         try
         {
             using var cursor = resolver.Query(
-                selected, new[] { Android.Provider.OpenableColumns.DisplayName }, null, null, null);
+                selected, new[] { global::Android.Provider.OpenableColumns.DisplayName }, null, null, null);
             if (cursor is not null && cursor.MoveToFirst())
                 displayName = cursor.GetString(0);
         }
