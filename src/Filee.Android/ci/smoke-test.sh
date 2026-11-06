@@ -56,3 +56,17 @@ if ! grep -q 'FileeImageTest.*PASS' /tmp/filee-ci/image-self-test.txt; then
   exit 1
 fi
 echo "Android image conversion regression check PASSED"
+
+
+echo "Testing MediaStore unredacted original read..."
+adb shell pm grant "$package" android.permission.ACCESS_MEDIA_LOCATION
+adb shell am force-stop "$package"
+adb logcat -c
+adb shell am start -n "$activity" --ez filee_original_selftest true
+sleep 12
+adb logcat -d -v brief -s FileeOriginalTest:I '*:S' | tee /tmp/filee-ci/original-media-self-test.txt
+if ! grep -q 'FileeOriginalTest.*PASS' /tmp/filee-ci/original-media-self-test.txt; then
+  echo "Unredacted original MediaStore read FAILED" >&2
+  exit 1
+fi
+echo "MediaStore original SHA-256 check PASSED"

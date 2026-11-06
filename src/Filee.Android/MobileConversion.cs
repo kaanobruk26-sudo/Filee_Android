@@ -81,10 +81,16 @@ internal static class MobileConversion
         var result = TempImagePath("." + target.ToLowerInvariant());
         try
         {
-            await using (var inputStream = await input.OpenReadAsync())
-            await using (var sourceStream = new FileStream(source, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-                await inputStream.CopyToAsync(sourceStream);
             var options = settings ?? ImageOptions.Default;
+            if (IsExactJpegCopy(input.Name, target, options))
+                await OriginalMediaAccess.CopyUnredactedAsync(input, source);
+            else
+            {
+                await using var inputStream = await input.OpenReadAsync();
+                await using var sourceStream = new FileStream(
+                    source, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                await inputStream.CopyToAsync(sourceStream);
+            }
             if (options.ExactJpegCopy && !IsExactJpegCopy(input.Name, target, options))
                 throw new InvalidOperationException(
                     "Kayıpsız kopya yalnızca JPG → JPG, orijinal boyut ve EXIF koruma açıkken kullanılabilir.");

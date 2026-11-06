@@ -149,7 +149,7 @@ public sealed class MainView : UserControl
                     _copyExactJpeg,
                     new TextBlock
                     {
-                        Text = "Aynen kopyala: sadece JPG → JPG. Tüm EXIF, ICC ve varsa GPS konumu da korunur. Kalite / çözünürlük değişmez.",
+                        Text = "Aynen kopyala: JPG → JPG için özgün medya izni istenir. Tüm EXIF, ICC ve GPS konumu korunur. Desteklenmeyen sağlayıcılarda kopyalama yapılmaz.",
                         TextWrapping = TextWrapping.Wrap, Foreground = Muted, FontSize = 12
                     },
                     new TextBlock
@@ -165,7 +165,7 @@ public sealed class MainView : UserControl
         layout.Children.Add(_status);
         layout.Children.Add(new TextBlock
         {
-            Text = "Filee Android topluluk portu • α0.1.8",
+            Text = "Filee Android topluluk portu • α0.1.9",
             Foreground = Muted, FontSize = 11, TextAlignment = TextAlignment.Center
         });
         Content = new Border
@@ -328,11 +328,13 @@ public sealed class MainView : UserControl
             else if (_inputs.Count == 1)
             {
                 var input = _inputs[0];
+                var options = CurrentImageOptions(format);
+                if (options.ExactJpegCopy)
+                    await OriginalMediaAccess.EnsureOriginalAccessAsync(input);
                 var output = await picker.SaveFilePickerAsync(new FilePickerSaveOptions
                 { Title = "Dosyayı kaydet", SuggestedFileName = MobileConversion.OutputFileName(input.Name, format) });
                 if (output is null) return;
                 _status.Text = $"{format} dönüştürülüyor…";
-                var options = CurrentImageOptions(format);
                 await MobileConversion.ConvertImageAsync(input, output, format, options);
                 _status.Text = options.ExactJpegCopy
                     ? "JPG dosyası değiştirilmeden kopyalandı ✓"
@@ -340,6 +342,10 @@ public sealed class MainView : UserControl
             }
             else
             {
+                var options = CurrentImageOptions(format);
+                if (options.ExactJpegCopy)
+                    foreach (var input in _inputs)
+                        await OriginalMediaAccess.EnsureOriginalAccessAsync(input);
                 var folders = await picker.OpenFolderPickerAsync(new FolderPickerOpenOptions
                 { Title = $"{format} dosyalarını kaydetmek için klasör seç" });
                 if (folders.Count == 0) return;
@@ -347,7 +353,7 @@ public sealed class MainView : UserControl
                 {
                     _status.Text = $"Dönüştürülüyor: {i + 1}/{_inputs.Count}";
                     var target = await folders[0].CreateFileAsync(MobileConversion.OutputFileName(_inputs[i].Name, format, i));
-                    await MobileConversion.ConvertImageAsync(_inputs[i], target, format, CurrentImageOptions(format));
+                    await MobileConversion.ConvertImageAsync(_inputs[i], target, format, options);
                 }
                 _status.Text = _copyExactJpeg.IsChecked == true && format == "JPG"
                     ? $"{_inputs.Count} JPG değiştirilmeden kopyalandı ✓"
