@@ -166,10 +166,20 @@ internal static class MobileConversion
             int copied = 0;
             foreach (var tag in ExifFields)
             {
-                var value = src.GetAttribute(tag);
-                if (string.IsNullOrWhiteSpace(value)) continue;
-                dst.SetAttribute(tag, value);
-                copied++;
+                try
+                {
+                    var value = src.GetAttribute(tag);
+                    if (string.IsNullOrWhiteSpace(value)) continue;
+                    dst.SetAttribute(tag, value);
+                    copied++;
+                }
+                catch (Exception e)
+                {
+                    // One unsupported maker-specific field should not prevent
+                    // all other standard EXIF fields from being saved.
+                    global::Android.Util.Log.Warn("FileeImage",
+                        $"EXIF field {tag} not supported on this device: {e.Message}");
+                }
             }
             // Pixels were physically rotated before encoding.
             dst.SetAttribute("Orientation", "1");
