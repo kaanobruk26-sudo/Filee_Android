@@ -83,3 +83,16 @@ if ! grep -q 'FileeHeifTest.*PASS' /tmp/filee-ci/heif-self-test.txt; then
   exit 1
 fi
 echo "HEIC/HEIF conversion regression PASSED"
+
+
+echo "Testing batch queue progress and per-file error isolation..."
+adb shell am force-stop "$package"
+adb logcat -c
+adb shell am start -n "$activity" --ez filee_batch_selftest true
+sleep 6
+adb logcat -d -v brief -s FileeBatchTest:I '*:S' | tee /tmp/filee-ci/batch-self-test.txt
+if ! grep -q 'FileeBatchTest.*PASS' /tmp/filee-ci/batch-self-test.txt; then
+  echo "Batch queue regression FAILED" >&2
+  exit 1
+fi
+echo "Batch queue regression PASSED"

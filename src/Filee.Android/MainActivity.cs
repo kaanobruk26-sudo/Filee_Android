@@ -149,5 +149,7 @@ public class MainActivity : AvaloniaMainActivity
             _ = Task.Run(OriginalMediaAccess.RunOriginalMediaSelfTestAsync);
         if (Intent?.GetBooleanExtra("filee_heif_selftest", false) == true)
             _ = Task.Run(MobileConversion.RunHeifEngineSelfTestAsync);
+        if (Intent?.GetBooleanExtra("filee_batch_selftest", false) == true)
+            _ = Task.Run(BatchConversionQueue.RunSelfTestAsync);
     }
 }

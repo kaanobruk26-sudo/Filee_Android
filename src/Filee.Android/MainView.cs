@@ -23,6 +23,9 @@ public sealed class MainView : UserControl
     private readonly Avalonia.Controls.CheckBox _preserveExif;
     private readonly Avalonia.Controls.CheckBox _copyExactJpeg;
     private readonly Border _imageSettings;
+    private readonly Border _batchPanel;
+    private readonly ProgressBar _batchProgress;
+    private readonly TextBlock _batchSummary, _batchDetails;
     private bool _busy;
 
     private static readonly IBrush Dark = Brush("#13141E");
@@ -168,12 +171,54 @@ public sealed class MainView : UserControl
                 }
             }
         };
+        _batchProgress = new ProgressBar
+        {
+            Minimum = 0, Maximum = 1, Value = 0, Height = 9,
+            Foreground = Accent
+        };
+        _batchSummary = new TextBlock
+        {
+            Text = "", Foreground = White, FontSize = 14,
+            FontWeight = FontWeight.SemiBold, TextWrapping = TextWrapping.Wrap
+        };
+        _batchDetails = new TextBlock
+        {
+            Text = "", Foreground = Muted, FontSize = 12,
+            TextWrapping = TextWrapping.Wrap
+        };
+        _batchPanel = new Border
+        {
+            Background = Panel, CornerRadius = new CornerRadius(20),
+            Margin = new Thickness(12, 0), Padding = new Thickness(16),
+            IsVisible = false,
+            Child = new StackPanel
+            {
+                Spacing = 8,
+                Children =
+                {
+                    new TextBlock
+                    {
+                        Text = "Toplu dönüştürme sonuçları",
+                        Foreground = White, FontSize = 17,
+                        FontWeight = FontWeight.SemiBold
+                    },
+                    _batchProgress,
+                    _batchSummary,
+                    new ScrollViewer
+                    {
+                        MaxHeight = 200,
+                        Content = _batchDetails
+                    }
+                }
+            }
+        };
         layout.Children.Add(_donut);
         layout.Children.Add(_imageSettings);
+        layout.Children.Add(_batchPanel);
         layout.Children.Add(_status);
         layout.Children.Add(new TextBlock
         {
-            Text = "Filee Android topluluk portu • α0.1.15",
+            Text = "Filee Android topluluk portu • α0.1.16",
             Foreground = Muted, FontSize = 11, TextAlignment = TextAlignment.Center
         });
         Content = new Border
@@ -264,6 +309,7 @@ public sealed class MainView : UserControl
             _galleryJpegUri = mediaUri;
             _galleryJpegName = name;
             _inputs.Clear();
+            _batchPanel.IsVisible = false;
             _sizeChoice.SelectedIndex = 0;
             _preserveExif.IsChecked = true;
             _selected.Text = name;
@@ -308,6 +354,7 @@ public sealed class MainView : UserControl
             _copyExactJpeg.IsChecked = false;
             _inputs.Clear();
             _inputs.AddRange(files);
+            _batchPanel.IsVisible = false;
             _selected.Text = files.Count == 1 ? files[0].Name : $"{files.Count} dosya seçildi";
             _status.Text = "Halka üzerindeki hedef biçime dokun.";
             RenderDonut();
@@ -422,7 +469,8 @@ public sealed class MainView : UserControl
                     ? "JPG dosyası değiştirilmeden kopyalandı ✓"
                     : "Dönüştürme tamamlandı ✓";
             }
-            else
+            else if (_inputs.Count > 1 && _inputs.All(x => MobileConversion.IsImage(x.Name)) &&
+                     (format is "JPG" or "PNG" or "WEBP"))
             {
                 var options = CurrentImageOptions(format);
                 if (options.ExactJpegCopy)
@@ -431,15 +479,64 @@ public sealed class MainView : UserControl
                 var folders = await picker.OpenFolderPickerAsync(new FolderPickerOpenOptions
                 { Title = $"{format} dosyalarını kaydetmek için klasör seç" });
                 if (folders.Count == 0) return;
-                for (int i = 0; i < _inputs.Count; i++)
-                {
-                    _status.Text = $"Dönüştürülüyor: {i + 1}/{_inputs.Count}";
-                    var target = await folders[0].CreateFileAsync(MobileConversion.OutputFileName(_inputs[i].Name, format, i));
-                    await MobileConversion.ConvertImageAsync(_inputs[i], target, format, options);
-                }
-                _status.Text = _copyExactJpeg.IsChecked == true && format == "JPG"
-                    ? $"{_inputs.Count} JPG değiştirilmeden kopyalandı ✓"
-                    : $"{_inputs.Count} dosya kaydedildi ✓";
+
+                _batchPanel.IsVisible = true;
+                _batchProgress.Minimum = 0;
+                _batchProgress.Maximum = _inputs.Count;
+                _batchProgress.Value = 0;
+                _batchSummary.Text = $"0/{_inputs.Count} • Başarılı: 0 • Hatalı: 0";
+                _batchDetails.Text = "";
+                var detailLines = new List<string>();
+
+                var summary = await BatchConversionQueue.RunAsync(
+                    _inputs,
+                    async (input, index) =>
+                    {
+                        _status.Text = $"Dönüştürülüyor {index + 1}/{_inputs.Count}: {input.Name}";
+                        IStorageFile? targetFile = null;
+                        try
+                        {
+                            targetFile = await folders[0].CreateFileAsync(
+                                MobileConversion.OutputFileName(input.Name, format, index))
+                                ?? throw new IOException("Hedef dosya oluşturulamadı.");
+                            await MobileConversion.ConvertImageAsync(input, targetFile, format, options);
+                        }
+                        catch
+                        {
+                            if (targetFile is not null)
+                            {
+                                try { await targetFile.DeleteAsync(); }
+                                catch (Exception cleanupError)
+                                {
+                                    global::Android.Util.Log.Warn("FileeBatch",
+                                        "Partial file cleanup failed: " + cleanupError);
+                                }
+                            }
+                            throw;
+                        }
+                    },
+                    input => input.Name,
+                    state =>
+                    {
+                        _batchProgress.Value = state.Completed;
+                        _batchSummary.Text = $"{state.Completed}/{state.Total} • " +
+                            $"Başarılı: {state.Succeeded} • Hatalı: {state.Failed}";
+                        detailLines.Add(state.Item.Succeeded
+                            ? $"✓ {state.Item.Name}"
+                            : $"✗ {state.Item.Name}: {state.Item.Error}");
+                        _batchDetails.Text = string.Join("\n", detailLines);
+                    });
+
+                _status.Text = summary.Failed == 0
+                    ? $"Tüm {summary.Total} fotoğraf dönüştürüldü ✓"
+                    : $"İşlem tamamlandı: {summary.Succeeded} başarılı, {summary.Failed} hatalı. " +
+                      "Dosya ayrıntılarına aşağıdan bak.";
+            }
+            else
+            {
+                throw new NotSupportedException(
+                    "Bu dosya/biçim kombinasyonu henüz desteklenmiyor. " +
+                    "Birden fazla fotoğraf için JPG, PNG veya WEBP seçin.");
             }
         }
         catch (Exception e)
