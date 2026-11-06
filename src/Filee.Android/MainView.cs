@@ -157,7 +157,7 @@ public sealed class MainView : UserControl
                     _copyExactJpeg,
                     new TextBlock
                     {
-                        Text = "Aynen kopyala için Galeriden özgün JPG seç düğmesini kullanın. EXIF, ICC ve varsa GPS korunur. Kalite / boyut değişmez.",
+                        Text = "Aynen kopyala için galeriden JPG seç. Görüntü yeniden sıkıştırılmaz. MediaStore dışı sağlayıcılar GPS/EXIF'i önceden gizleyebilir.",
                         TextWrapping = TextWrapping.Wrap, Foreground = Muted, FontSize = 12
                     },
                     new TextBlock
@@ -173,7 +173,7 @@ public sealed class MainView : UserControl
         layout.Children.Add(_status);
         layout.Children.Add(new TextBlock
         {
-            Text = "Filee Android topluluk portu • α0.1.11",
+            Text = "Filee Android topluluk portu • α0.1.12",
             Foreground = Muted, FontSize = 11, TextAlignment = TextAlignment.Center
         });
         Content = new Border
@@ -269,7 +269,7 @@ public sealed class MainView : UserControl
             _selected.Text = name;
             RenderDonut();
             _copyExactJpeg.IsChecked = true;
-            _status.Text = "JPG seçildi. JPG'ye basınca özgün veri erişimi kontrol edilecek.";
+            _status.Text = "JPG seçildi. Dosya değiştirilmeden kopyalanacak; bazı sağlayıcılar GPS/EXIF'i gizleyebilir.";
         }
         catch (Exception e)
         {
@@ -344,8 +344,12 @@ public sealed class MainView : UserControl
                 });
                 if (output is null) return;
                 _status.Text = "JPG değiştirilmeden kopyalanıyor ve doğrulanıyor…";
-                var (bytes, hash) = await OriginalMediaAccess.CopyGalleryJpegExactAsync(original, output);
-                _status.Text = $"JPG birebir kopyalandı ✓ {bytes:N0} bayt, SHA-256: {hash[..12]}…";
+                var (bytes, hash, confirmedOriginal) =
+                    await OriginalMediaAccess.CopyGalleryJpegExactAsync(original, output);
+                _status.Text = confirmedOriginal
+                    ? $"Özgün JPEG doğrulandı ✓ {bytes:N0} bayt • SHA-256 {hash[..12]}…"
+                    : $"Seçilen JPG verisi aynen kaydedildi ✓ {bytes:N0} bayt • SHA-256 {hash[..12]}… " +
+                      "Sağlayıcının özgün GPS/EXIF verisini verdiği garanti edilemez.";
             }
             else if (format == "ZIP")
             {

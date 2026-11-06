@@ -93,14 +93,17 @@ internal static class OriginalMediaAccess
         return displayName;
     }
 
-    public static async Task<(long bytes, string sha256)> CopyGalleryJpegExactAsync(
+    // The result distinguishes a MediaStore unredacted original from bytes
+    // supplied by a third-party content provider (whose EXIF may be masked).
+    public static async Task<(long bytes, string sha256, bool confirmedOriginal)> CopyGalleryJpegExactAsync(
         global::Android.Net.Uri selected, IStorageFile output)
     {
         await EnsureOriginalAccessAsync(selected);
-        var original = ResolveMediaUri(selected)
-            ?? throw new NotSupportedException(
-                "Galeri bu görüntünün özgün verisine erişemiyor (sağlayıcı: "
-                + (selected.Authority ?? "bilinmiyor") + ").");
+        var original = ResolveMediaUri(selected);
+        bool confirmedOriginal = original is not null;
+        // Non-MediaStore providers (e.g., Xiaomi File Explorer) are legitimate
+        // sources. We can copy their selected stream exactly, but cannot prove
+        // Android did not redact location EXIF before it reached us.
 
         var cacheDir = global::Android.App.Application.Context.CacheDir?.AbsolutePath
             ?? throw new IOException("Uygulama önbelleğine ulaşılamıyor.");
@@ -108,7 +111,11 @@ internal static class OriginalMediaAccess
             "filee_gallery_" + Guid.NewGuid().ToString("N") + ".jpg");
         try
         {
-            if (original.Scheme == "file")
+            if (original is null)
+            {
+                await CopyProviderStreamAsync(selected, temp);
+            }
+            else if (original.Scheme == "file")
             {
                 var filePath = original.Path
                     ?? throw new IOException("Dosya konumu bulunamadı.");
@@ -145,7 +152,9 @@ internal static class OriginalMediaAccess
                 throw new InvalidDataException(
                     "Kaydedilen JPG ile özgün kaynak uyuşmadı. Birebir kopya doğrulanamadı.");
 
-            return (bytes, Convert.ToHexString(sourceHash));
+            global::Android.Util.Log.Info("FileeOriginal",
+                $"Saved JPEG verified: bytes={bytes}, SHA256={Convert.ToHexString(sourceHash)}, originalGuaranteed={confirmedOriginal}, provider={selected.Authority}");
+            return (bytes, Convert.ToHexString(sourceHash), confirmedOriginal);
         }
         finally
         {
@@ -153,14 +162,41 @@ internal static class OriginalMediaAccess
         }
     }
 
+
+    /// <summary>
+    /// Read the bytes that a third-party provider exposes via the picker URI.
+    /// This never transcodes/recompresses, but the provider could have
+    /// redacted metadata before handing the stream to the application.
+    /// </summary>
+    private static async Task CopyProviderStreamAsync(global::Android.Net.Uri selected, string path)
+    {
+        var resolver = global::Android.App.Application.Context.ContentResolver
+            ?? throw new IOException("Dosya sağlayıcısına erişilemiyor.");
+        using var source = resolver.OpenInputStream(selected)
+            ?? throw new IOException("Seçilen JPG için okuma akışı açılamadı. Dosya sağlayıcısı erişim vermiyor.");
+        await using var destination = new FileStream(
+            path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        await source.CopyToAsync(destination);
+        await destination.FlushAsync();
+        global::Android.Util.Log.Info("FileeOriginal",
+            $"Provider stream copied: {selected.Authority}, {destination.Length} bytes");
+    }
+
     public static async Task EnsureOriginalAccessAsync(global::Android.Net.Uri selected)
     {
         var uri = ResolveMediaUri(selected);
         if (uri is null)
-            throw new NotSupportedException(
-                "Bu galeri sağlayıcısı özgün JPEG erişimini desteklemiyor ("
-                + (selected.Authority ?? "bilinmiyor")
-                + "). Yerel Android galerisinden fotoğraf seçin.");
+        {
+            // A picker-granted URI is readable through ContentResolver, even
+            // if it doesn't belong to MediaStore. There is no meaningful way
+            // to apply MediaStore.SetRequireOriginal to this authority.
+            if (selected.Scheme != "content")
+                throw new NotSupportedException("Fotoğrafın sağlayıcı adresi desteklenmiyor.");
+            global::Android.Util.Log.Warn("FileeOriginal",
+                "Third-party JPEG provider: copying accessible bytes only, original EXIF not guaranteed: "
+                + selected.Authority);
+            return;
+        }
 
         if (uri.Scheme == "file") return;
         var activity = MainActivity.Current
@@ -293,6 +329,21 @@ internal static class OriginalMediaAccess
             if (!galleryName.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("Galeri medya URI dosya adını çözemedi.");
             CopyRequireOriginal(uri, copied);
+            // Exercise the generic provider stream path too; the real Xiaomi
+            // picker uses com.android.fileexplorer.myprovider instead of media.
+            var generic = Path.Combine(context.CacheDir!.AbsolutePath,
+                "filee_provider_" + Guid.NewGuid().ToString("N") + ".jpg");
+            try
+            {
+                await CopyProviderStreamAsync(uri, generic);
+                if (!SHA256.HashData(File.ReadAllBytes(local)).AsSpan().SequenceEqual(
+                    SHA256.HashData(File.ReadAllBytes(generic))))
+                    throw new InvalidDataException("Generic provider byte-copy did not match.");
+            }
+            finally
+            {
+                if (File.Exists(generic)) File.Delete(generic);
+            }
             var hashA = SHA256.HashData(File.ReadAllBytes(local));
             var hashB = SHA256.HashData(File.ReadAllBytes(copied));
             if (!hashA.AsSpan().SequenceEqual(hashB))
