@@ -17,7 +17,7 @@ public sealed class MainView : UserControl
     private readonly ComboBox _sizeChoice;
     private readonly Slider _qualitySlider;
     private readonly TextBlock _qualityLabel;
-    private readonly CheckBox _preserveExif;
+    private readonly Avalonia.Controls.CheckBox _preserveExif;
     private readonly Border _imageSettings;
     private bool _busy;
 
@@ -93,7 +93,7 @@ public sealed class MainView : UserControl
             if (e.Property.Name == nameof(Slider.Value))
                 _qualityLabel.Text = $"JPG / WEBP kalite: {(int)_qualitySlider.Value}";
         };
-        _preserveExif = new CheckBox
+        _preserveExif = new Avalonia.Controls.CheckBox
         {
             Content = "EXIF çekim bilgilerini koru (GPS hariç)",
             IsChecked = true, Foreground = Muted
