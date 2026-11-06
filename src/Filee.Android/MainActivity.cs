@@ -14,6 +14,37 @@ public class MainActivity : AvaloniaMainActivity
     // Native ACTION_CREATE_DOCUMENT is used so Android saves the output as
     // application/pdf instead of the generic */* MIME from Avalonia's picker.
     private const int PdfSaveRequest = 16072;
+    private const int OriginalJpegPickerRequest = 16074;
+    private TaskCompletionSource<global::Android.Net.Uri?>? _pendingOriginalJpegPick;
+
+    /// <summary>
+    /// Pick a JPEG via the system's media picker, retaining the content URI
+    /// grant rather than using the generic document picker.
+    /// </summary>
+    public Task<global::Android.Net.Uri?> PickOriginalJpegAsync()
+    {
+        if (_pendingOriginalJpegPick is not null)
+            throw new InvalidOperationException("Galeri seçimi zaten açık.");
+        var pending = new TaskCompletionSource<global::Android.Net.Uri?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        _pendingOriginalJpegPick = pending;
+        try
+        {
+            var intent = new global::Android.Content.Intent(
+                global::Android.Content.Intent.ActionPick);
+            intent.SetDataAndType(
+                global::Android.Provider.MediaStore.Images.Media.ExternalContentUri, "image/jpeg");
+            intent.AddFlags(global::Android.Content.ActivityFlags.GrantReadUriPermission);
+            StartActivityForResult(intent, OriginalJpegPickerRequest);
+        }
+        catch (Exception e)
+        {
+            _pendingOriginalJpegPick = null;
+            pending.TrySetException(e);
+        }
+        return pending.Task;
+    }
+
     private const int MediaLocationRequest = 16073;
     private TaskCompletionSource<bool>? _pendingMediaLocation;
 
@@ -79,6 +110,12 @@ public class MainActivity : AvaloniaMainActivity
     protected override void OnActivityResult(int requestCode, global::Android.App.Result resultCode,
         global::Android.Content.Intent? data)
     {
+        if (requestCode == OriginalJpegPickerRequest)
+        {
+            var pending = _pendingOriginalJpegPick;
+            _pendingOriginalJpegPick = null;
+            pending?.TrySetResult(resultCode == global::Android.App.Result.Ok ? data?.Data : null);
+        }
         if (requestCode == PdfSaveRequest)
         {
             var pending = _pendingPdfSave;
@@ -90,6 +127,8 @@ public class MainActivity : AvaloniaMainActivity
 
     protected override void OnDestroy()
     {
+        _pendingOriginalJpegPick?.TrySetCanceled();
+        _pendingOriginalJpegPick = null;
         _pendingMediaLocation?.TrySetCanceled();
         _pendingMediaLocation = null;
         _pendingPdfSave?.TrySetCanceled();

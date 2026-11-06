@@ -36,13 +36,23 @@ internal static class OriginalMediaAccess
         return null;
     }
 
+    public static bool IsSupportedOriginalSource(IStorageFile file) =>
+        ResolveMediaUri(file) is not null;
+
+    public static string SourceAuthority(IStorageFile file)
+    {
+        var source = global::Android.Net.Uri.Parse(file.Path.ToString());
+        return source?.Authority ?? (source?.Scheme ?? "bilinmiyor");
+    }
+
     public static async Task EnsureOriginalAccessAsync(IStorageFile file)
     {
         var mediaUri = ResolveMediaUri(file);
         if (mediaUri is null)
             throw new NotSupportedException(
-                "Tam EXIF kopyası için fotoğrafı Android'in yerel medya galerisinden seçin. " +
-                "Bulut veya desteklenmeyen dosya sağlayıcılarından özgün veri garanti edilemiyor.");
+                "Bu dosya sağlayıcısı (" + SourceAuthority(file) +
+                ") tam EXIF kopyalamayı desteklemiyor. " +
+                "Ana ekrandaki 'Galeriden özgün JPG seç' düğmesini kullanın.");
         if (mediaUri.Scheme == "file") return; // Direct filesystem access is not MediaStore-redacted.
         var activity = MainActivity.Current ??
             throw new InvalidOperationException("Android etkinliği bulunamadı.");

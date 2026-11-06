@@ -14,6 +14,7 @@ public sealed class MainView : UserControl
     private readonly TextBlock _selected, _status;
     private readonly Canvas _donut;
     private readonly Avalonia.Controls.Button _open;
+    private readonly Avalonia.Controls.Button _openGallery;
     private readonly ComboBox _sizeChoice;
     private readonly Slider _qualitySlider;
     private readonly TextBlock _qualityLabel;
@@ -56,6 +57,11 @@ public sealed class MainView : UserControl
         _open.Padding = new Thickness(24, 13);
         _open.Click += async (_, _) => await PickFiles();
 
+        _openGallery = Button("Galeriden özgün JPG seç");
+        _openGallery.HorizontalAlignment = HorizontalAlignment.Center;
+        _openGallery.Padding = new Thickness(24, 11);
+        _openGallery.Click += async (_, _) => await PickOriginalJpegFromGallery();
+
         _donut = new Canvas { Width = 350, Height = 340, HorizontalAlignment = HorizontalAlignment.Center };
         var layout = new StackPanel { Spacing = 14, Margin = new Thickness(12, 30, 12, 30) };
         layout.Children.Add(new TextBlock
@@ -72,7 +78,7 @@ public sealed class MainView : UserControl
         {
             Background = Panel, CornerRadius = new CornerRadius(22),
             Padding = new Thickness(16), Margin = new Thickness(12, 10, 12, 0),
-            Child = new StackPanel { Spacing = 14, Children = { _selected, _open } }
+            Child = new StackPanel { Spacing = 12, Children = { _selected, _open, _openGallery } }
         });
         layout.Children.Add(new TextBlock
         {
@@ -149,7 +155,7 @@ public sealed class MainView : UserControl
                     _copyExactJpeg,
                     new TextBlock
                     {
-                        Text = "Aynen kopyala: JPG → JPG için özgün medya izni istenir. Tüm EXIF, ICC ve GPS konumu korunur. Desteklenmeyen sağlayıcılarda kopyalama yapılmaz.",
+                        Text = "Aynen kopyala için Galeriden özgün JPG seç düğmesini kullanın. EXIF, ICC ve varsa GPS korunur. Kalite / boyut değişmez.",
                         TextWrapping = TextWrapping.Wrap, Foreground = Muted, FontSize = 12
                     },
                     new TextBlock
@@ -165,7 +171,7 @@ public sealed class MainView : UserControl
         layout.Children.Add(_status);
         layout.Children.Add(new TextBlock
         {
-            Text = "Filee Android topluluk portu • α0.1.9",
+            Text = "Filee Android topluluk portu • α0.1.10",
             Foreground = Muted, FontSize = 11, TextAlignment = TextAlignment.Center
         });
         Content = new Border
@@ -234,6 +240,46 @@ public sealed class MainView : UserControl
         }
     }
 
+    private async Task PickOriginalJpegFromGallery()
+    {
+        var provider = TopLevel.GetTopLevel(this)?.StorageProvider;
+        if (provider is null || !provider.CanOpen)
+        {
+            _status.Text = "Fotoğraf seçme servisi kullanılamıyor.";
+            return;
+        }
+        try
+        {
+            var activity = MainActivity.Current
+                ?? throw new InvalidOperationException("Android galeri penceresi açılamıyor.");
+            var mediaUri = await activity.PickOriginalJpegAsync();
+            if (mediaUri is null) return;
+            var file = await provider.TryGetFileFromPathAsync(new System.Uri(mediaUri.ToString()))
+                ?? throw new IOException("Galeriden seçilen fotoğraf açılamadı.");
+            if (!MobileConversion.IsJpeg(file.Name))
+                throw new NotSupportedException("Bu modda yalnızca JPEG dosyaları seçilebilir.");
+            if (!OriginalMediaAccess.IsSupportedOriginalSource(file))
+                throw new NotSupportedException(
+                    "Galeri özgün MediaStore bağlantısı döndürmedi ("
+                    + OriginalMediaAccess.SourceAuthority(file)
+                    + "). Fotoğrafın cihazın yerel galerisinde olduğundan emin olun.");
+
+            _inputs.Clear();
+            _inputs.Add(file);
+            _sizeChoice.SelectedIndex = 0;
+            _preserveExif.IsChecked = true;
+            _selected.Text = file.Name;
+            RenderDonut();
+            _copyExactJpeg.IsChecked = true;
+            _status.Text = "Özgün JPG seçildi. JPG'ye basınca gerekirse medya konumu izni istenir.";
+        }
+        catch (Exception e)
+        {
+            global::Android.Util.Log.Error("FileeGalleryPicker", e.ToString());
+            _status.Text = $"Galeri seçimi başarısız: {e.Message}";
+        }
+    }
+
     private MobileConversion.ImageOptions CurrentImageOptions(string target)
     {
         int max = _sizeChoice.SelectedIndex switch
@@ -276,6 +322,7 @@ public sealed class MainView : UserControl
         if (picker is null) return;
         _busy = true;
         _open.IsEnabled = false;
+        _openGallery.IsEnabled = false;
         RenderDonut();
         try
         {
@@ -369,6 +416,7 @@ public sealed class MainView : UserControl
         {
             _busy = false;
             _open.IsEnabled = true;
+            _openGallery.IsEnabled = true;
             RenderDonut();
         }
     }
