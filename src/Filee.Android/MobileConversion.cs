@@ -66,7 +66,11 @@ internal static class MobileConversion
         "FocalLength", "FocalLengthIn35mmFilm", "Flash", "WhiteBalance",
         "LensMake", "LensModel", "LensSpecification", "LensSerialNumber",
         "ExposureBiasValue", "MeteringMode", "ExposureProgram", "ExposureMode",
-        "SubSecTime", "SubSecTimeOriginal", "LightSource",
+        "SubSecTime", "SubSecTimeOriginal", "SubSecTimeDigitized",
+        "OffsetTime", "OffsetTimeOriginal", "OffsetTimeDigitized",
+        "LightSource", "ApertureValue", "BrightnessValue", "MaxApertureValue",
+        "SceneCaptureType", "SensingMethod", "DigitalZoomRatio",
+        "SubjectDistance", "Sharpness", "Contrast", "Saturation",
         "Artist", "Copyright", "Software"
     ];
 
@@ -168,40 +172,61 @@ internal static class MobileConversion
             ?? throw new InvalidDataException("Fotoğrafın yönü düzeltilemedi.");
     }
 
-    private static void CopySafeExif(string source, string target)
+    private static (int available, int verified) CopySafeExif(string source, string target)
     {
+        // AndroidX ExifInterface has better HEIF metadata parsing than the
+        // framework reader and supports writing standard EXIF into JPEG/PNG/WebP.
+        // Never transplant maker notes, raw XMP offsets or GPS: some values
+        // contain image-container offsets, and the output is a new encoding.
         try
         {
-            using var src = new global::Android.Media.ExifInterface(source);
-            using var dst = new global::Android.Media.ExifInterface(target);
-            int copied = 0;
+            using var src = new global::AndroidX.ExifInterface.Media.ExifInterface(source);
+            using var dst = new global::AndroidX.ExifInterface.Media.ExifInterface(target);
+            var inputAttributes = new Dictionary<string,string>();
             foreach (var tag in ExifFields)
             {
                 try
                 {
                     var value = src.GetAttribute(tag);
                     if (string.IsNullOrWhiteSpace(value)) continue;
+                    inputAttributes[tag] = value;
                     dst.SetAttribute(tag, value);
-                    copied++;
                 }
                 catch (Exception e)
                 {
-                    // One unsupported maker-specific field should not prevent
-                    // all other standard EXIF fields from being saved.
-                    global::Android.Util.Log.Warn("FileeImage",
-                        $"EXIF field {tag} not supported on this device: {e.Message}");
+                    global::Android.Util.Log.Warn("FileeExif",
+                        $"Unsupported EXIF tag {tag}: {e.Message}");
                 }
             }
-            // Pixels were physically rotated before encoding.
+
+            // Pixel orientation is normalized by ApplyOrientation.
             dst.SetAttribute("Orientation", "1");
+            // The color-managed JPEG/PNG/WebP pixels are decoded to sRGB.
+            dst.SetAttribute("ColorSpace", "1");
             dst.SaveAttributes();
-            global::Android.Util.Log.Info("FileeImage", $"Preserved {copied} standard EXIF fields (no GPS).");
+
+            using var check = new global::AndroidX.ExifInterface.Media.ExifInterface(target);
+            int verified = 0;
+            foreach (var tag in inputAttributes.Keys)
+            {
+                // Some EXIF libraries normalize the string representation of
+                // rationals; verify presence, not a byte-for-byte string match.
+                if (!string.IsNullOrWhiteSpace(check.GetAttribute(tag)))
+                    verified++;
+                else
+                    global::Android.Util.Log.Warn("FileeExif",
+                        $"Metadata field missing from converted image: {tag}");
+            }
+            global::Android.Util.Log.Info("FileeExif",
+                $"Standard EXIF tags read={inputAttributes.Count}, present after export={verified}, " +
+                "location metadata intentionally omitted; maker notes not transplanted");
+            return (inputAttributes.Count, verified);
         }
         catch (Exception e)
         {
-            // Invalid or unsupported metadata must not silently destroy an
-            // otherwise successfully encoded photograph.
-            global::Android.Util.Log.Warn("FileeImage", "Partial/unsupported EXIF: " + e);
+            global::Android.Util.Log.Warn("FileeExif",
+                "EXIF could not be fully copied/verified; image conversion can continue: " + e);
+            return (0, 0);
         }
     }
 
@@ -231,7 +256,15 @@ internal static class MobileConversion
         while (maxSide / (sample * 2) >= requested && sample < 64)
             sample *= 2;
 
-        using var decodeOptions = new BitmapFactory.Options { InSampleSize = sample, InScaled = false };
+        // Decode into an explicit output color space. An ICC profile from a
+        // HEIC container must NOT be pasted into JPEG if the decoded pixels
+        // are now sRGB: that would mislabel colors and distort rendering.
+        using var decodeOptions = new BitmapFactory.Options
+        {
+            InSampleSize = sample, InScaled = false,
+            InPreferredConfig = Bitmap.Config.Argb8888!,
+            InPreferredColorSpace = ColorSpace.Get(ColorSpace.Named.Srgb)
+        };
         Bitmap current;
         try
         {
@@ -249,6 +282,14 @@ internal static class MobileConversion
 
         try
         {
+            var actualColor = current.ColorSpace;
+            if (actualColor is not null && !actualColor.IsSrgb)
+                throw new NotSupportedException(
+                    "Bu fotoğrafın renk profili sRGB'ye güvenle dönüştürülemedi. " +
+                    "Yanlış renklerle JPG oluşturmamak için işlem durduruldu.");
+            global::Android.Util.Log.Info("FileeColor",
+                $"Decoded {Path.GetExtension(input)} into {actualColor?.Name ?? "unknown"} (requested sRGB).");
+
             int orientation = ReadOrientation(input);
             if (orientation != 1)
             {
@@ -300,13 +341,21 @@ internal static class MobileConversion
             }
 
             if (opts.PreserveExif)
-                CopySafeExif(input, output);
+            {
+                var metadata = CopySafeExif(input, output);
+                global::Android.Util.Log.Info("FileeExif",
+                    $"Output {target}, standard metadata available={metadata.available}, " +
+                    $"present={metadata.verified}. Proprietary EXIF and HEIC ICC not bitwise preserved.");
+            }
 
             // Check the encoded image locally before it is copied to SAF.
             using var verified = new BitmapFactory.Options { InJustDecodeBounds = true, InScaled = false };
             BitmapFactory.DecodeFile(output, verified);
             if (verified.OutWidth != current.Width || verified.OutHeight != current.Height)
                 throw new InvalidDataException("Oluşturulan görüntünün boyutları doğrulanamadı.");
+            if (verified.OutColorSpace is not null && !verified.OutColorSpace.IsSrgb)
+                throw new InvalidDataException(
+                    "Oluşturulan görüntünün sRGB renk alanı doğrulanamadı.");
             global::Android.Util.Log.Info("FileeImage",
                 $"Converted {width}x{height} to {verified.OutWidth}x{verified.OutHeight}, {target}");
         }
@@ -337,6 +386,10 @@ internal static class MobileConversion
                 exif.SetAttribute("Orientation", "6");
                 exif.SetAttribute("Make", "FileeTest");
                 exif.SetAttribute("Model", "AndroidEmulator");
+                exif.SetAttribute("DateTimeOriginal", "2026:11:06 20:57:51");
+                exif.SetAttribute("LensModel", "Android Pixel Test Lens");
+                exif.SetAttribute("ExposureTime", "1/125");
+                exif.SetAttribute("ISOSpeedRatings", "320");
                 exif.SaveAttributes();
             }
 
@@ -360,10 +413,15 @@ internal static class MobileConversion
                         throw new InvalidDataException("Tam JPEG kopyasında EXIF değişti.");
                 }
                 ConvertLocalImage(input, jpg, "JPG", new ImageOptions(95, 0, true));
-                using (var e = new global::Android.Media.ExifInterface(jpg))
+                using (var e = new global::AndroidX.ExifInterface.Media.ExifInterface(jpg))
                 {
-                    if (e.GetAttribute("Make") != "FileeTest" || e.GetAttributeInt("Orientation", 0) != 1)
-                        throw new InvalidDataException("JPEG EXIF korunamadı.");
+                    if (e.GetAttribute("Make") != "FileeTest" ||
+                        e.GetAttribute("Model") != "AndroidEmulator" ||
+                        e.GetAttribute("LensModel") != "Android Pixel Test Lens" ||
+                        e.GetAttribute("DateTimeOriginal") != "2026:11:06 20:57:51" ||
+                        e.GetAttributeInt("Orientation", 0) != 1 ||
+                        e.GetAttribute("ColorSpace") != "1")
+                        throw new InvalidDataException("JPEG standard EXIF/renk bilgisi korunamadı.");
                 }
                 AssertSize(jpg, 120, 240);
                 ConvertLocalImage(input, png, "PNG", new ImageOptions(90, 160, false));

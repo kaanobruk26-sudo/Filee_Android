@@ -162,7 +162,7 @@ public sealed class MainView : UserControl
                     },
                     new TextBlock
                     {
-                        Text = "PNG kayıpsızdır. HDR/10-bit ve tüm üretici özel EXIF alanları korunmaz.",
+                        Text = "PNG kayıpsız kodlanır. JPG/PNG/WEBP sRGB'ye dönüştürülür; desteklenen standart EXIF aktarılır. HEIC'in özgün ICC, HDR/10-bit ve üretici özel EXIF verileri birebir korunmaz.",
                         TextWrapping = TextWrapping.Wrap, Foreground = Muted, FontSize = 12
                     }
                 }
@@ -173,7 +173,7 @@ public sealed class MainView : UserControl
         layout.Children.Add(_status);
         layout.Children.Add(new TextBlock
         {
-            Text = "Filee Android topluluk portu • α0.1.14",
+            Text = "Filee Android topluluk portu • α0.1.15",
             Foreground = Muted, FontSize = 11, TextAlignment = TextAlignment.Center
         });
         Content = new Border
