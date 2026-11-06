@@ -18,6 +18,7 @@ public sealed class MainView : UserControl
     private readonly Slider _qualitySlider;
     private readonly TextBlock _qualityLabel;
     private readonly Avalonia.Controls.CheckBox _preserveExif;
+    private readonly Avalonia.Controls.CheckBox _copyExactJpeg;
     private readonly Border _imageSettings;
     private bool _busy;
 
@@ -95,8 +96,37 @@ public sealed class MainView : UserControl
         };
         _preserveExif = new Avalonia.Controls.CheckBox
         {
-            Content = "EXIF çekim bilgilerini koru (GPS hariç)",
+            Content = "Yeniden kodlamada standart EXIF'i koru (GPS hariç)",
             IsChecked = true, Foreground = Muted
+        };
+        _copyExactJpeg = new Avalonia.Controls.CheckBox
+        {
+            Content = "JPG'yi aynen kopyala (yeniden sıkıştırma yok)",
+            IsChecked = false, Foreground = White, IsVisible = false
+        };
+        _copyExactJpeg.PropertyChanged += (_, e) =>
+        {
+            if (e.Property.Name == nameof(Avalonia.Controls.CheckBox.IsChecked))
+            {
+                _qualitySlider.IsEnabled = _copyExactJpeg.IsChecked != true;
+                _qualityLabel.Text = _copyExactJpeg.IsChecked == true
+                    ? "Kalite ayarı uygulanmaz (orijinal JPG kopyalanır)"
+                    : $"JPG / WEBP kalite: {(int)_qualitySlider.Value}";
+            }
+        };
+        _sizeChoice.PropertyChanged += (_, e) =>
+        {
+            if (e.Property.Name == nameof(ComboBox.SelectedIndex) && _sizeChoice.SelectedIndex != 0)
+                _copyExactJpeg.IsChecked = false;
+            _copyExactJpeg.IsEnabled = _sizeChoice.SelectedIndex == 0 && _preserveExif.IsChecked == true;
+        };
+        _preserveExif.PropertyChanged += (_, e) =>
+        {
+            if (e.Property.Name == nameof(Avalonia.Controls.CheckBox.IsChecked))
+            {
+                if (_preserveExif.IsChecked != true) _copyExactJpeg.IsChecked = false;
+                _copyExactJpeg.IsEnabled = _sizeChoice.SelectedIndex == 0 && _preserveExif.IsChecked == true;
+            }
         };
         _imageSettings = new Border
         {
@@ -116,6 +146,12 @@ public sealed class MainView : UserControl
                     _qualityLabel,
                     _qualitySlider,
                     _preserveExif,
+                    _copyExactJpeg,
+                    new TextBlock
+                    {
+                        Text = "Aynen kopyala: sadece JPG → JPG. Tüm EXIF, ICC ve varsa GPS konumu da korunur. Kalite / çözünürlük değişmez.",
+                        TextWrapping = TextWrapping.Wrap, Foreground = Muted, FontSize = 12
+                    },
                     new TextBlock
                     {
                         Text = "PNG kayıpsızdır. HDR/10-bit ve tüm üretici özel EXIF alanları korunmaz.",
@@ -129,7 +165,7 @@ public sealed class MainView : UserControl
         layout.Children.Add(_status);
         layout.Children.Add(new TextBlock
         {
-            Text = "Filee Android topluluk portu • α0.1.7",
+            Text = "Filee Android topluluk portu • α0.1.8",
             Foreground = Muted, FontSize = 11, TextAlignment = TextAlignment.Center
         });
         Content = new Border
@@ -153,6 +189,8 @@ public sealed class MainView : UserControl
     {
         _donut.Children.Clear();
         _imageSettings.IsVisible = _inputs.Count > 0 && _inputs.All(x => MobileConversion.IsImage(x.Name));
+        _copyExactJpeg.IsVisible = _inputs.Count > 0 && _inputs.All(x => MobileConversion.IsJpeg(x.Name));
+        if (!_copyExactJpeg.IsVisible) _copyExactJpeg.IsChecked = false;
         const double cx = 175, cy = 170;
         var ring = new Ellipse
         {
@@ -196,7 +234,7 @@ public sealed class MainView : UserControl
         }
     }
 
-    private MobileConversion.ImageOptions CurrentImageOptions()
+    private MobileConversion.ImageOptions CurrentImageOptions(string target)
     {
         int max = _sizeChoice.SelectedIndex switch
         {
@@ -205,7 +243,10 @@ public sealed class MainView : UserControl
             3 => 2048,
             _ => 0
         };
-        return new MobileConversion.ImageOptions((int)_qualitySlider.Value, max, _preserveExif.IsChecked == true);
+        return new MobileConversion.ImageOptions(
+            (int)_qualitySlider.Value, max, _preserveExif.IsChecked == true,
+            target == "JPG" && _copyExactJpeg.IsChecked == true &&
+            _inputs.All(x => MobileConversion.IsJpeg(x.Name)));
     }
 
     private async Task PickFiles()
@@ -291,8 +332,11 @@ public sealed class MainView : UserControl
                 { Title = "Dosyayı kaydet", SuggestedFileName = MobileConversion.OutputFileName(input.Name, format) });
                 if (output is null) return;
                 _status.Text = $"{format} dönüştürülüyor…";
-                await MobileConversion.ConvertImageAsync(input, output, format, CurrentImageOptions());
-                _status.Text = "Dönüştürme tamamlandı ✓";
+                var options = CurrentImageOptions(format);
+                await MobileConversion.ConvertImageAsync(input, output, format, options);
+                _status.Text = options.ExactJpegCopy
+                    ? "JPG dosyası değiştirilmeden kopyalandı ✓"
+                    : "Dönüştürme tamamlandı ✓";
             }
             else
             {
@@ -303,9 +347,11 @@ public sealed class MainView : UserControl
                 {
                     _status.Text = $"Dönüştürülüyor: {i + 1}/{_inputs.Count}";
                     var target = await folders[0].CreateFileAsync(MobileConversion.OutputFileName(_inputs[i].Name, format, i));
-                    await MobileConversion.ConvertImageAsync(_inputs[i], target, format, CurrentImageOptions());
+                    await MobileConversion.ConvertImageAsync(_inputs[i], target, format, CurrentImageOptions(format));
                 }
-                _status.Text = $"{_inputs.Count} dosya kaydedildi ✓";
+                _status.Text = _copyExactJpeg.IsChecked == true && format == "JPG"
+                    ? $"{_inputs.Count} JPG değiştirilmeden kopyalandı ✓"
+                    : $"{_inputs.Count} dosya kaydedildi ✓";
             }
         }
         catch (Exception e)

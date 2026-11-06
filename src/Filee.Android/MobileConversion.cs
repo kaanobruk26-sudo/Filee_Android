@@ -21,6 +21,9 @@ internal static class MobileConversion
     };
 
     public static bool IsImage(string name) => ImageExtensions.Contains(Path.GetExtension(name));
+    public static bool IsJpeg(string name) =>
+        Path.GetExtension(name).Equals(".jpg", StringComparison.OrdinalIgnoreCase) ||
+        Path.GetExtension(name).Equals(".jpeg", StringComparison.OrdinalIgnoreCase);
     public static bool IsPdf(string name) => Path.GetExtension(name).Equals(".pdf", StringComparison.OrdinalIgnoreCase);
 
     public static string[] AvailableFormats(IReadOnlyList<IStorageFile> inputs)
@@ -43,9 +46,10 @@ internal static class MobileConversion
         return $"{safe}_filee{(index < 0 ? "" : $"_{index + 1}")}.{format.ToLowerInvariant()}";
     }
 
-    public readonly record struct ImageOptions(int Quality, int MaxLongEdge, bool PreserveExif)
+    public readonly record struct ImageOptions(
+        int Quality, int MaxLongEdge, bool PreserveExif, bool ExactJpegCopy = false)
     {
-        public static ImageOptions Default => new(92, 0, true);
+        public static ImageOptions Default => new(92, 0, true, false);
     }
 
     // Safe, widely recognized EXIF fields only. GPS location, face regions,
@@ -54,7 +58,11 @@ internal static class MobileConversion
     [
         "Make", "Model", "DateTime", "DateTimeOriginal", "DateTimeDigitized",
         "ExposureTime", "FNumber", "ISOSpeedRatings", "PhotographicSensitivity",
-        "FocalLength", "Flash", "WhiteBalance", "LensModel", "Artist", "Copyright"
+        "FocalLength", "FocalLengthIn35mmFilm", "Flash", "WhiteBalance",
+        "LensMake", "LensModel", "LensSpecification", "LensSerialNumber",
+        "ExposureBiasValue", "MeteringMode", "ExposureProgram", "ExposureMode",
+        "SubSecTime", "SubSecTimeOriginal", "LightSource",
+        "Artist", "Copyright", "Software"
     ];
 
     private static string TempImagePath(string extension)
@@ -76,7 +84,14 @@ internal static class MobileConversion
             await using (var inputStream = await input.OpenReadAsync())
             await using (var sourceStream = new FileStream(source, FileMode.CreateNew, FileAccess.Write, FileShare.None))
                 await inputStream.CopyToAsync(sourceStream);
-            await Task.Run(() => ConvertLocalImage(source, result, target, settings ?? ImageOptions.Default));
+            var options = settings ?? ImageOptions.Default;
+            if (options.ExactJpegCopy && !IsExactJpegCopy(input.Name, target, options))
+                throw new InvalidOperationException(
+                    "Kayıpsız kopya yalnızca JPG → JPG, orijinal boyut ve EXIF koruma açıkken kullanılabilir.");
+            if (IsExactJpegCopy(input.Name, target, options))
+                await Task.Run(() => CopyJpegExactly(source, result));
+            else
+                await Task.Run(() => ConvertLocalImage(source, result, target, options));
             await using var outputStream = await output.OpenWriteAsync();
             await using var resultStream = File.OpenRead(result);
             await resultStream.CopyToAsync(outputStream);
@@ -87,6 +102,27 @@ internal static class MobileConversion
             if (File.Exists(source)) File.Delete(source);
             if (File.Exists(result)) File.Delete(result);
         }
+    }
+
+    public static bool IsExactJpegCopy(string name, string target, ImageOptions opts) =>
+        opts.ExactJpegCopy && target == "JPG" && IsJpeg(name) &&
+        opts.MaxLongEdge == 0 && opts.PreserveExif;
+
+    private static void CopyJpegExactly(string input, string output)
+    {
+        // This is a byte-for-byte archival copy, not a JPEG transcoding step.
+        using (var source = File.OpenRead(input))
+        {
+            if (source.Length < 4 || source.ReadByte() != 0xFF || source.ReadByte() != 0xD8)
+                throw new InvalidDataException("Kaynak dosya geçerli bir JPEG değil.");
+        }
+        using var dimensions = new BitmapFactory.Options { InJustDecodeBounds = true };
+        BitmapFactory.DecodeFile(input, dimensions);
+        if (dimensions.OutWidth <= 0 || dimensions.OutHeight <= 0)
+            throw new InvalidDataException("Kaynak JPEG okunamadı.");
+        File.Copy(input, output, overwrite: false);
+        global::Android.Util.Log.Info("FileeImage",
+            $"Byte-exact JPEG copied; {new FileInfo(output).Length} bytes.");
     }
 
     private static int ReadOrientation(string source)
@@ -257,6 +293,7 @@ internal static class MobileConversion
         var jpg = TempImagePath(".jpg");
         var png = TempImagePath(".png");
         var webp = TempImagePath(".webp");
+        var originalCopy = TempImagePath(".jpg");
         try
         {
             using (var b = Bitmap.CreateBitmap(240, 120, Bitmap.Config.Argb8888!))
@@ -276,6 +313,23 @@ internal static class MobileConversion
 
             await Task.Run(() =>
             {
+                // A no-reencode JPEG must preserve every byte, including
+                // MakerNotes, ICC, GPS when present, and 4:2:2 subsampling.
+                CopyJpegExactly(input, originalCopy);
+                using (var src = File.OpenRead(input))
+                using (var dst = File.OpenRead(originalCopy))
+                {
+                    var a = System.Security.Cryptography.SHA256.HashData(src);
+                    var b = System.Security.Cryptography.SHA256.HashData(dst);
+                    if (!a.AsSpan().SequenceEqual(b))
+                        throw new InvalidDataException("Tam JPG kopyasının SHA-256 değeri eşleşmedi.");
+                }
+                using (var originalExif = new global::Android.Media.ExifInterface(originalCopy))
+                {
+                    if (originalExif.GetAttributeInt("Orientation", 0) != 6 ||
+                        originalExif.GetAttribute("Make") != "FileeTest")
+                        throw new InvalidDataException("Tam JPEG kopyasında EXIF değişti.");
+                }
                 ConvertLocalImage(input, jpg, "JPG", new ImageOptions(95, 0, true));
                 using (var e = new global::Android.Media.ExifInterface(jpg))
                 {
@@ -288,7 +342,7 @@ internal static class MobileConversion
                 ConvertLocalImage(input, webp, "WEBP", new ImageOptions(77, 120, false));
                 AssertSize(webp, 60, 120);
             });
-            global::Android.Util.Log.Info("FileeImageTest", "PASS: JPEG EXIF and rotation; PNG 80x160; WEBP 60x120");
+            global::Android.Util.Log.Info("FileeImageTest", "PASS: JPEG byte-exact SHA256; JPEG EXIF and rotation; PNG 80x160; WEBP 60x120");
         }
         catch (Exception e)
         {
@@ -296,7 +350,7 @@ internal static class MobileConversion
         }
         finally
         {
-            foreach (var f in new[] { input, jpg, png, webp })
+            foreach (var f in new[] { input, jpg, png, webp, originalCopy })
                 if (File.Exists(f)) File.Delete(f);
         }
     }
