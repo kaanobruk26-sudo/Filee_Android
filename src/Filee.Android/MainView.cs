@@ -11,6 +11,8 @@ namespace Filee.Mobile;
 public sealed class MainView : UserControl
 {
     private readonly List<IStorageFile> _inputs = [];
+    private global::Android.Net.Uri? _galleryJpegUri;
+    private string _galleryJpegName = "fotoğraf.jpg";
     private readonly TextBlock _selected, _status;
     private readonly Canvas _donut;
     private readonly Avalonia.Controls.Button _open;
@@ -171,7 +173,7 @@ public sealed class MainView : UserControl
         layout.Children.Add(_status);
         layout.Children.Add(new TextBlock
         {
-            Text = "Filee Android topluluk portu • α0.1.10",
+            Text = "Filee Android topluluk portu • α0.1.11",
             Foreground = Muted, FontSize = 11, TextAlignment = TextAlignment.Center
         });
         Content = new Border
@@ -194,8 +196,10 @@ public sealed class MainView : UserControl
     private void RenderDonut()
     {
         _donut.Children.Clear();
-        _imageSettings.IsVisible = _inputs.Count > 0 && _inputs.All(x => MobileConversion.IsImage(x.Name));
-        _copyExactJpeg.IsVisible = _inputs.Count > 0 && _inputs.All(x => MobileConversion.IsJpeg(x.Name));
+        _imageSettings.IsVisible = _galleryJpegUri is not null ||
+            (_inputs.Count > 0 && _inputs.All(x => MobileConversion.IsImage(x.Name)));
+        _copyExactJpeg.IsVisible = _galleryJpegUri is not null ||
+            (_inputs.Count > 0 && _inputs.All(x => MobileConversion.IsJpeg(x.Name)));
         if (!_copyExactJpeg.IsVisible) _copyExactJpeg.IsChecked = false;
         const double cx = 175, cy = 170;
         var ring = new Ellipse
@@ -214,7 +218,8 @@ public sealed class MainView : UserControl
 
         var caption = new TextBlock
         {
-            Text = _inputs.Count == 0 ? "DOSYA\nSEÇ" : $"{_inputs.Count} DOSYA",
+            Text = _galleryJpegUri is not null ? "1 DOSYA" :
+                   _inputs.Count == 0 ? "DOSYA\nSEÇ" : $"{_inputs.Count} DOSYA",
             Foreground = White, FontWeight = FontWeight.Bold,
             TextAlignment = TextAlignment.Center, Width = 120
         };
@@ -222,9 +227,11 @@ public sealed class MainView : UserControl
         Canvas.SetTop(caption, cy - 22);
         _donut.Children.Add(caption);
 
-        string[] formats = _inputs.Count == 0
-            ? ["JPG", "PNG", "WEBP", "PDF", "ZIP"]
-            : MobileConversion.AvailableFormats(_inputs);
+        string[] formats = _galleryJpegUri is not null
+            ? ["JPG"]
+            : _inputs.Count == 0
+                ? ["JPG", "PNG", "WEBP", "PDF", "ZIP"]
+                : MobileConversion.AvailableFormats(_inputs);
         for (int i = 0; i < formats.Length; i++)
         {
             var format = formats[i];
@@ -232,7 +239,7 @@ public sealed class MainView : UserControl
             var target = Button(format);
             target.Width = 80;
             target.Height = 48;
-            target.IsEnabled = _inputs.Count > 0 && !_busy;
+            target.IsEnabled = (_galleryJpegUri is not null || _inputs.Count > 0) && !_busy;
             target.Click += async (_, _) => await Convert(format);
             Canvas.SetLeft(target, cx + 120 * Math.Cos(a) - 40);
             Canvas.SetTop(target, cy + 120 * Math.Sin(a) - 24);
@@ -242,36 +249,27 @@ public sealed class MainView : UserControl
 
     private async Task PickOriginalJpegFromGallery()
     {
-        var provider = TopLevel.GetTopLevel(this)?.StorageProvider;
-        if (provider is null || !provider.CanOpen)
-        {
-            _status.Text = "Fotoğraf seçme servisi kullanılamıyor.";
-            return;
-        }
+        if (_busy) return;
         try
         {
             var activity = MainActivity.Current
                 ?? throw new InvalidOperationException("Android galeri penceresi açılamıyor.");
             var mediaUri = await activity.PickOriginalJpegAsync();
             if (mediaUri is null) return;
-            var file = await provider.TryGetFileFromPathAsync(new System.Uri(mediaUri.ToString()))
-                ?? throw new IOException("Galeriden seçilen fotoğraf açılamadı.");
-            if (!MobileConversion.IsJpeg(file.Name))
-                throw new NotSupportedException("Bu modda yalnızca JPEG dosyaları seçilebilir.");
-            if (!OriginalMediaAccess.IsSupportedOriginalSource(file))
-                throw new NotSupportedException(
-                    "Galeri özgün MediaStore bağlantısı döndürmedi ("
-                    + OriginalMediaAccess.SourceAuthority(file)
-                    + "). Fotoğrafın cihazın yerel galerisinde olduğundan emin olun.");
 
+            // Do not route the native Android content:// URI through Avalonia's
+            // TryGetFileFromPathAsync: on many devices this returns null.
+            // Keep Android's URI and its read grant until the exact-copy action.
+            var name = OriginalMediaAccess.GetGalleryJpegName(mediaUri);
+            _galleryJpegUri = mediaUri;
+            _galleryJpegName = name;
             _inputs.Clear();
-            _inputs.Add(file);
             _sizeChoice.SelectedIndex = 0;
             _preserveExif.IsChecked = true;
-            _selected.Text = file.Name;
+            _selected.Text = name;
             RenderDonut();
             _copyExactJpeg.IsChecked = true;
-            _status.Text = "Özgün JPG seçildi. JPG'ye basınca gerekirse medya konumu izni istenir.";
+            _status.Text = "JPG seçildi. JPG'ye basınca özgün veri erişimi kontrol edilecek.";
         }
         catch (Exception e)
         {
@@ -306,6 +304,8 @@ public sealed class MainView : UserControl
                 Title = "Dönüştürülecek dosyaları seç", AllowMultiple = true
             });
             if (files.Count == 0) return;
+            _galleryJpegUri = null;
+            _copyExactJpeg.IsChecked = false;
             _inputs.Clear();
             _inputs.AddRange(files);
             _selected.Text = files.Count == 1 ? files[0].Name : $"{files.Count} dosya seçildi";
@@ -317,7 +317,7 @@ public sealed class MainView : UserControl
 
     private async Task Convert(string format)
     {
-        if (_busy || _inputs.Count == 0) return;
+        if (_busy || (_inputs.Count == 0 && _galleryJpegUri is null)) return;
         var picker = TopLevel.GetTopLevel(this)?.StorageProvider;
         if (picker is null) return;
         _busy = true;
@@ -326,7 +326,28 @@ public sealed class MainView : UserControl
         RenderDonut();
         try
         {
-            if (format == "ZIP")
+            if (_galleryJpegUri is not null)
+            {
+                if (format != "JPG")
+                    throw new NotSupportedException("Özgün galeri modunda yalnızca JPG kopyası yapılabilir.");
+                if (_sizeChoice.SelectedIndex != 0 || _copyExactJpeg.IsChecked != true ||
+                    _preserveExif.IsChecked != true)
+                    throw new InvalidOperationException(
+                        "Özgün kopya için orijinal çözünürlük, EXIF koruma ve aynen kopyala açık olmalı.");
+
+                var original = _galleryJpegUri;
+                await OriginalMediaAccess.EnsureOriginalAccessAsync(original);
+                var output = await picker.SaveFilePickerAsync(new FilePickerSaveOptions
+                {
+                    Title = "Özgün JPEG kopyasını kaydet",
+                    SuggestedFileName = MobileConversion.OutputFileName(_galleryJpegName, "JPG")
+                });
+                if (output is null) return;
+                _status.Text = "JPG değiştirilmeden kopyalanıyor ve doğrulanıyor…";
+                var (bytes, hash) = await OriginalMediaAccess.CopyGalleryJpegExactAsync(original, output);
+                _status.Text = $"JPG birebir kopyalandı ✓ {bytes:N0} bayt, SHA-256: {hash[..12]}…";
+            }
+            else if (format == "ZIP")
             {
                 var output = await picker.SaveFilePickerAsync(new FilePickerSaveOptions
                 { Title = "ZIP kaydet", SuggestedFileName = "filee_archive.zip" });

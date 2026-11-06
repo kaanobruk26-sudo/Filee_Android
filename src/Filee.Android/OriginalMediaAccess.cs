@@ -45,6 +45,147 @@ internal static class OriginalMediaAccess
         return source?.Authority ?? (source?.Scheme ?? "bilinmiyor");
     }
 
+
+    /// <summary>
+    /// Read the name and MIME type from the native URI. Avalonia's file picker
+    /// bridge cannot resolve all Android provider URI types.
+    /// </summary>
+    public static string GetGalleryJpegName(global::Android.Net.Uri selected)
+    {
+        if (selected.Scheme != "content" && selected.Scheme != "file")
+            throw new NotSupportedException("Galeri geçerli bir dosya adresi vermedi.");
+
+        var resolver = global::Android.App.Application.Context.ContentResolver
+            ?? throw new IOException("Android içerik sağlayıcısı kullanılamıyor.");
+        var mime = resolver.GetType(selected);
+        if (!string.IsNullOrWhiteSpace(mime) &&
+            !mime.Equals("image/jpeg", StringComparison.OrdinalIgnoreCase) &&
+            !mime.Equals("image/jpg", StringComparison.OrdinalIgnoreCase))
+            throw new NotSupportedException("Seçilen dosya JPEG değil: " + mime);
+
+        string? displayName = null;
+        try
+        {
+            using var cursor = resolver.Query(
+                selected, new[] { Android.Provider.OpenableColumns.DisplayName }, null, null, null);
+            if (cursor is not null && cursor.MoveToFirst())
+                displayName = cursor.GetString(0);
+        }
+        catch (Exception ex)
+        {
+            global::Android.Util.Log.Warn("FileeGalleryPicker", "Filename query: " + ex.Message);
+        }
+
+        if (string.IsNullOrWhiteSpace(displayName))
+            displayName = selected.LastPathSegment ?? "fotoğraf.jpg";
+        displayName = System.IO.Path.GetFileName(displayName);
+        if (!MobileConversion.IsJpeg(displayName))
+        {
+            if (!string.IsNullOrWhiteSpace(mime) &&
+                (mime.Equals("image/jpeg", StringComparison.OrdinalIgnoreCase) ||
+                 mime.Equals("image/jpg", StringComparison.OrdinalIgnoreCase)))
+                displayName += ".jpg";
+            else
+                throw new NotSupportedException(
+                    "Galeri dosyayı JPEG olarak tanımlamıyor. JPG fotoğraf seçin.");
+        }
+
+        return displayName;
+    }
+
+    public static async Task<(long bytes, string sha256)> CopyGalleryJpegExactAsync(
+        global::Android.Net.Uri selected, IStorageFile output)
+    {
+        await EnsureOriginalAccessAsync(selected);
+        var original = ResolveMediaUri(selected)
+            ?? throw new NotSupportedException(
+                "Galeri bu görüntünün özgün verisine erişemiyor (sağlayıcı: "
+                + (selected.Authority ?? "bilinmiyor") + ").");
+
+        var cacheDir = global::Android.App.Application.Context.CacheDir?.AbsolutePath
+            ?? throw new IOException("Uygulama önbelleğine ulaşılamıyor.");
+        var temp = System.IO.Path.Combine(cacheDir,
+            "filee_gallery_" + Guid.NewGuid().ToString("N") + ".jpg");
+        try
+        {
+            if (original.Scheme == "file")
+            {
+                var filePath = original.Path
+                    ?? throw new IOException("Dosya konumu bulunamadı.");
+                System.IO.File.Copy(filePath, temp);
+            }
+            else
+            {
+                await Task.Run(() => CopyRequireOriginal(original, temp));
+            }
+
+            await using (var test = System.IO.File.OpenRead(temp))
+            {
+                if (test.Length < 4 || test.ReadByte() != 0xFF || test.ReadByte() != 0xD8)
+                    throw new InvalidDataException("Özgün dosya geçerli bir JPEG değil.");
+            }
+            var bytes = new System.IO.FileInfo(temp).Length;
+            byte[] sourceHash;
+            await using (var src = System.IO.File.OpenRead(temp))
+                sourceHash = await SHA256.HashDataAsync(src);
+
+            await using (var target = await output.OpenWriteAsync())
+            await using (var src = System.IO.File.OpenRead(temp))
+            {
+                await src.CopyToAsync(target);
+                await target.FlushAsync();
+            }
+
+            // Verify what the user actually saved. Do not report "byte exact"
+            // merely because the cached source and internal copy match.
+            byte[] savedHash;
+            await using (var saved = await output.OpenReadAsync())
+                savedHash = await SHA256.HashDataAsync(saved);
+            if (!sourceHash.AsSpan().SequenceEqual(savedHash))
+                throw new InvalidDataException(
+                    "Kaydedilen JPG ile özgün kaynak uyuşmadı. Birebir kopya doğrulanamadı.");
+
+            return (bytes, Convert.ToHexString(sourceHash));
+        }
+        finally
+        {
+            if (System.IO.File.Exists(temp)) System.IO.File.Delete(temp);
+        }
+    }
+
+    public static async Task EnsureOriginalAccessAsync(global::Android.Net.Uri selected)
+    {
+        var uri = ResolveMediaUri(selected);
+        if (uri is null)
+            throw new NotSupportedException(
+                "Bu galeri sağlayıcısı özgün JPEG erişimini desteklemiyor ("
+                + (selected.Authority ?? "bilinmiyor")
+                + "). Yerel Android galerisinden fotoğraf seçin.");
+
+        if (uri.Scheme == "file") return;
+        var activity = MainActivity.Current
+            ?? throw new InvalidOperationException("Android ekranı bulunamadı.");
+        if (!await activity.RequestMediaLocationAccessAsync())
+            throw new UnauthorizedAccessException(
+                "Özgün EXIF için medya konumu izni verilmedi. İzin vermeden birebir kopyalama yapılamaz.");
+    }
+
+    private static global::Android.Net.Uri? ResolveMediaUri(global::Android.Net.Uri source)
+    {
+        if (source.Scheme == "file") return source;
+        if (source.Scheme != "content") return null;
+        if (source.Authority == "media") return source;
+        if (source.Authority == "com.android.providers.media.documents")
+        {
+            var id = DocumentsContract.GetDocumentId(source);
+            if (id is not null && id.StartsWith("image:", StringComparison.OrdinalIgnoreCase) &&
+                long.TryParse(id["image:".Length..], out var imageId))
+                return ContentUris.WithAppendedId(
+                    MediaStore.Images.Media.ExternalContentUri!, imageId);
+        }
+        return null;
+    }
+
     public static async Task EnsureOriginalAccessAsync(IStorageFile file)
     {
         var mediaUri = ResolveMediaUri(file);
@@ -148,6 +289,9 @@ internal static class OriginalMediaAccess
             values.Put(MediaStore.IMediaColumns.IsPending, 0);
             resolver.Update(uri, values, null, null);
 
+            var galleryName = GetGalleryJpegName(uri);
+            if (!galleryName.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("Galeri medya URI dosya adını çözemedi.");
             CopyRequireOriginal(uri, copied);
             var hashA = SHA256.HashData(File.ReadAllBytes(local));
             var hashB = SHA256.HashData(File.ReadAllBytes(copied));
