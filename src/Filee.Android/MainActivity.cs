@@ -61,13 +61,31 @@ public class MainActivity : AvaloniaMainActivity
         StartActivity(CreateSavedFolderBrowseIntent(uri));
     }
 
+    private static global::Android.Net.Uri NormalizeDocumentInitialUri(
+        global::Android.Net.Uri uri)
+    {
+        // ACTION_OPEN_DOCUMENT requires a document URI (or a tree URI with
+        // document ID). Xiaomi's picker can fall back to Download when given
+        // only content://.../tree/<id>, even if <id> points to a subfolder.
+        var segments = uri.PathSegments;
+        if (segments is not null && segments.Contains("tree") &&
+            !segments.Contains("document"))
+        {
+            var id = global::Android.Provider.DocumentsContract.GetTreeDocumentId(uri);
+            return global::Android.Provider.DocumentsContract.BuildDocumentUriUsingTree(uri, id)
+                ?? uri;
+        }
+        return uri;
+    }
+
     private static global::Android.Content.Intent CreateSavedFolderBrowseIntent(
         global::Android.Net.Uri initialUri)
     {
+        var normalized = NormalizeDocumentInitialUri(initialUri);
         return new global::Android.Content.Intent(global::Android.Content.Intent.ActionOpenDocument)
             .AddCategory(global::Android.Content.Intent.CategoryOpenable)
             .SetType("*/*")
-            .PutExtra(InitialUriExtra, initialUri)
+            .PutExtra(InitialUriExtra, normalized)
             .AddFlags(global::Android.Content.ActivityFlags.GrantReadUriPermission);
     }
 
@@ -76,14 +94,20 @@ public class MainActivity : AvaloniaMainActivity
         try
         {
             using var uri = global::Android.Net.Uri.Parse(
-                "content://com.android.externalstorage.documents/tree/primary%3ADownload")
+                "content://com.android.externalstorage.documents/tree/" +
+                "primary%3ADownload%2FFilee%20Test")
                 ?? throw new InvalidOperationException("Test URI missing");
             using var intent = CreateSavedFolderBrowseIntent(uri);
+            var normalized = NormalizeDocumentInitialUri(uri);
+            var id = global::Android.Provider.DocumentsContract.GetDocumentId(normalized);
             if (intent.Action != global::Android.Content.Intent.ActionOpenDocument ||
-                intent.Type != "*/*" || !intent.HasExtra(InitialUriExtra))
-                throw new InvalidOperationException("Folder browser intent mismatch.");
+                intent.Type != "*/*" || !intent.HasExtra(InitialUriExtra) ||
+                !normalized.ToString().Contains("/document/") ||
+                id != "primary:Download/Filee Test")
+                throw new InvalidOperationException(
+                    "Selected subfolder was not preserved in document URI.");
             global::Android.Util.Log.Info("FileeFolderTest",
-                "PASS: ACTION_OPEN_DOCUMENT and initial folder URI");
+                "PASS: Filee Test subfolder URI normalized; ACTION_OPEN_DOCUMENT initial location");
         }
         catch (Exception ex)
         {

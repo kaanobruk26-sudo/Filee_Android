@@ -28,6 +28,10 @@ public sealed class MainView : UserControl
     private readonly TextBlock _settingsSummary;
     private readonly ScrollViewer _pageScroll;
     private string? _lastSavedFolderUri;
+    private IStorageFolder? _lastSavedFolder;
+    private readonly Border _folderPanel;
+    private readonly TextBlock _folderHeader, _folderItems;
+    private readonly Avalonia.Controls.Button _openExternalFolder;
     private readonly Border _batchPanel;
     private readonly Avalonia.Controls.ProgressBar _batchProgress;
     private readonly TextBlock _batchSummary, _batchDetails;
@@ -247,12 +251,47 @@ public sealed class MainView : UserControl
         _openSavedFolder.IsVisible = false;
         _openSavedFolder.HorizontalAlignment = HorizontalAlignment.Stretch;
         _openSavedFolder.Margin = new Thickness(18, 0);
-        _openSavedFolder.Click += (_, _) => OpenSavedFolder();
+        _openSavedFolder.Click += async (_, _) => await ShowSavedFolderAsync();
         layout.Children.Add(_openSavedFolder);
+        _folderHeader = new TextBlock
+        {
+            Text = "Kayıt klasörü", Foreground = White, FontSize = 17,
+            FontWeight = FontWeight.SemiBold, TextWrapping = TextWrapping.Wrap
+        };
+        _folderItems = new TextBlock
+        {
+            Text = "", Foreground = Muted, FontSize = 13,
+            TextWrapping = TextWrapping.Wrap
+        };
+        _openExternalFolder = Button("Android dosya seçicisinde açmayı dene");
+        _openExternalFolder.Click += (_, _) => OpenSavedFolderExternal();
+        _folderPanel = new Border
+        {
+            Background = Panel, CornerRadius = new CornerRadius(20),
+            Padding = new Thickness(16), Margin = new Thickness(12, 0),
+            IsVisible = false,
+            Child = new StackPanel
+            {
+                Spacing = 10,
+                Children =
+                {
+                    _folderHeader,
+                    new ScrollViewer { Content = _folderItems, MaxHeight = 275 },
+                    _openExternalFolder,
+                    new TextBlock
+                    {
+                        Text = "Dosya seçicisi bazı Xiaomi cihazlarında üst klasörü açabilir. " +
+                            "Yukarıdaki liste doğrudan seçtiğin klasörden okunur.",
+                        Foreground = Muted, FontSize = 11, TextWrapping = TextWrapping.Wrap
+                    }
+                }
+            }
+        };
+        layout.Children.Add(_folderPanel);
         layout.Children.Add(_status);
         layout.Children.Add(new TextBlock
         {
-            Text = "Filee Android topluluk portu • α0.1.17",
+            Text = "Filee Android topluluk portu • α0.1.18",
             Foreground = Muted, FontSize = 11, TextAlignment = TextAlignment.Center
         });
         _pageScroll = new ScrollViewer { Content = layout };
@@ -421,12 +460,19 @@ public sealed class MainView : UserControl
     {
         _batchPanel.IsVisible = false;
         _batchDetails.Text = "";
+        _lastSavedFolder = null;
         _lastSavedFolderUri = null;
+        _folderPanel.IsVisible = false;
         _openSavedFolder.IsVisible = false;
     }
 
-    private void RememberSavedFolder(IStorageFolder folder) =>
+    private void RememberSavedFolder(IStorageFolder folder)
+    {
+        _lastSavedFolder = folder;
+        _lastSavedFolderUri = null;
+        _openSavedFolder.IsVisible = true;
         RememberSavedUri(folder.Path.ToString());
+    }
 
     private void RememberSavedUri(string? uri)
     {
@@ -457,23 +503,89 @@ public sealed class MainView : UserControl
         }
     }
 
-    private void OpenSavedFolder()
+    private async Task ShowSavedFolderAsync()
+    {
+        _folderPanel.IsVisible = true;
+        _openSavedFolder.IsEnabled = false;
+        _folderHeader.Text = "Kayıt klasörü";
+        _folderItems.Text = "Klasör içeriği okunuyor…";
+        try
+        {
+            // For a batch conversion, this is the exact IStorageFolder selected
+            // by the user for saving. Do not ask Android's picker to guess its
+            // initial location from a tree URI (Xiaomi may open Download).
+            var folder = _lastSavedFolder;
+            if (folder is null && _lastSavedFolderUri is not null &&
+                System.Uri.TryCreate(_lastSavedFolderUri, UriKind.Absolute, out var contentUri))
+            {
+                folder = await (TopLevel.GetTopLevel(this)?.StorageProvider
+                    .TryGetFolderFromPathAsync(contentUri)
+                    ?? Task.FromResult<IStorageFolder?>(null));
+            }
+
+            if (folder is null)
+            {
+                _folderItems.Text = "Bu kayıt sağlayıcısı üst klasöre doğrudan " +
+                    "erişim vermiyor. Android dosya seçicisinden konumu açmayı deneyebilirsin.";
+                _openExternalFolder.IsVisible = _lastSavedFolderUri is not null;
+                return;
+            }
+
+            _lastSavedFolder = folder;
+            _folderHeader.Text = "📁 " + folder.Name;
+            var names = new List<string>();
+            await foreach (var item in folder.GetItemsAsync())
+            {
+                names.Add((item is IStorageFolder ? "📁 " : "📄 ") + item.Name);
+                if (names.Count >= 100)
+                    break;
+            }
+            names.Sort(StringComparer.CurrentCultureIgnoreCase);
+            _folderItems.Text = names.Count == 0
+                ? "Klasör boş."
+                : string.Join("\n", names) +
+                  (names.Count == 100 ? "\n… İlk 100 öğe gösteriliyor." : "");
+            _openExternalFolder.IsVisible = _lastSavedFolderUri is not null;
+            _status.Text = $"Kayıt klasörü: {folder.Name} • {names.Count}" +
+                (names.Count == 100 ? "+" : "") + " öğe";
+            global::Android.Util.Log.Info("FileeFolder",
+                $"Opened selected folder in Filee: {folder.Name}, listed {names.Count} items");
+        }
+        catch (Exception ex)
+        {
+            global::Android.Util.Log.Warn("FileeFolder", "Cannot list saved folder: " + ex);
+            _folderItems.Text = "Klasör içeriği okunamadı: " + ex.Message;
+            _openExternalFolder.IsVisible = _lastSavedFolderUri is not null;
+        }
+        finally
+        {
+            _openSavedFolder.IsEnabled = true;
+            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            {
+                var bottom = Math.Max(0,
+                    _pageScroll.Extent.Height - _pageScroll.Viewport.Height);
+                _pageScroll.Offset = new Vector(0, bottom);
+            });
+        }
+    }
+
+    private void OpenSavedFolderExternal()
     {
         if (_lastSavedFolderUri is null || MainActivity.Current is null)
         {
-            _status.Text = "Kaydedilen konum kullanılamıyor.";
+            _status.Text = "Android dosya seçicisinde açılabilecek kayıt URI'si yok.";
             return;
         }
         try
         {
             MainActivity.Current.OpenSavedFolderBrowser(_lastSavedFolderUri);
-            _status.Text = "Android dosya seçicisi açıldı. Sağlayıcı destekliyorsa kayıt " +
-                "konumuna gider; çıkmak için geri tuşuna bas.";
+            _status.Text = "Dosya seçicisi açıldı. Klasörün adı farklıysa " +
+                "Filee'ye dönerek doğrudan klasör listesini kullan.";
         }
         catch (Exception ex)
         {
-            global::Android.Util.Log.Warn("FileeFolder", "Cannot browse output: " + ex);
-            _status.Text = "Kayıt konumu açılamadı: " + ex.Message;
+            global::Android.Util.Log.Warn("FileeFolder", "External browse failed: " + ex);
+            _status.Text = "Dosya seçicisi klasörü açamadı: " + ex.Message;
         }
     }
 
