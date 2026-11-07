@@ -106,13 +106,68 @@ public class MainActivity : AvaloniaMainActivity
                 id != "primary:Download/Filee Test")
                 throw new InvalidOperationException(
                     "Selected subfolder was not preserved in document URI.");
+            using var image = global::Android.Net.Uri.Parse(
+                "content://com.android.externalstorage.documents/tree/" +
+                "primary%3AFilee%20Test/document/primary%3AFilee%20Test%2Fphoto.jpg")
+                ?? throw new InvalidOperationException("Test image URI missing");
+            using var view = CreateSavedFileViewIntent(image, "photo.jpg");
+            if (view.Action != global::Android.Content.Intent.ActionView ||
+                view.Type != "image/jpeg" ||
+                view.Data?.ToString() != image.ToString() ||
+                (view.Flags & global::Android.Content.ActivityFlags.GrantReadUriPermission) == 0 ||
+                MainView.FriendlyFolderName("primary:Filee Test") != "Filee Test" ||
+                MainView.FriendlyFolderName("primary:Download/Filee Test") != "Filee Test")
+                throw new InvalidOperationException("File URI/MIME/read grant or friendly folder name failed.");
             global::Android.Util.Log.Info("FileeFolderTest",
-                "PASS: Filee Test subfolder URI normalized; ACTION_OPEN_DOCUMENT initial location");
+                "PASS: exact subfolder URI, clean folder name, JPEG ACTION_VIEW with read grant");
         }
         catch (Exception ex)
         {
             global::Android.Util.Log.Error("FileeFolderTest", "FAIL: " + ex);
         }
+    }
+
+    /// <summary>
+    /// Opens the exact file returned by the saved folder's Android document
+    /// provider. The content URI is passed to the matching viewer with a
+    /// temporary READ grant. No copying to a public or external directory.
+    /// </summary>
+    public void OpenSavedFileInAnotherApp(string uriText, string fileName)
+    {
+        var uri = global::Android.Net.Uri.Parse(uriText)
+            ?? throw new ArgumentException("Dosya adresi geçersiz.", nameof(uriText));
+        if (!string.Equals(uri.Scheme, "content", StringComparison.OrdinalIgnoreCase))
+            throw new NotSupportedException(
+                "Bu dosyanın içerik adresi Android uygulamalarında açılamıyor.");
+        var intent = CreateSavedFileViewIntent(uri, fileName);
+        StartActivity(intent);
+    }
+
+    private static string FileMimeType(string name)
+    {
+        var ext = System.IO.Path.GetExtension(name).ToLowerInvariant();
+        return ext switch
+        {
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".png" => "image/png",
+            ".webp" => "image/webp",
+            ".heic" or ".heif" or ".hif" => "image/heic",
+            ".bmp" => "image/bmp",
+            ".pdf" => "application/pdf",
+            ".txt" or ".log" => "text/plain",
+            ".zip" => "application/zip",
+            ".mp4" => "video/mp4",
+            ".mp3" => "audio/mpeg",
+            _ => "*/*"
+        };
+    }
+
+    private static global::Android.Content.Intent CreateSavedFileViewIntent(
+        global::Android.Net.Uri uri, string fileName)
+    {
+        return new global::Android.Content.Intent(global::Android.Content.Intent.ActionView)
+            .SetDataAndType(uri, FileMimeType(fileName))
+            .AddFlags(global::Android.Content.ActivityFlags.GrantReadUriPermission);
     }
 
     private const int MediaLocationRequest = 16073;
