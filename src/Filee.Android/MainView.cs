@@ -308,7 +308,7 @@ public sealed class MainView : UserControl
                     _folderBack,
                     new StackPanel
                     {
-                        Orientation = Orientation.Horizontal,
+                        Orientation = Avalonia.Layout.Orientation.Horizontal,
                         Spacing = 6,
                         HorizontalAlignment = HorizontalAlignment.Center,
                         Children = { _folderAllFilter, _folderImagesFilter, _folderPdfFilter }
@@ -726,7 +726,7 @@ public sealed class MainView : UserControl
             {
                 Content = new StackPanel
                 {
-                    Orientation = Orientation.Horizontal,
+                    Orientation = Avalonia.Layout.Orientation.Horizontal,
                     Spacing = 9,
                     Children = { icon, label }
                 },
