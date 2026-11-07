@@ -278,5 +278,7 @@ public class MainActivity : AvaloniaMainActivity
             _ = Task.Run(BatchConversionQueue.RunSelfTestAsync);
         if (Intent?.GetBooleanExtra("filee_folder_selftest", false) == true)
             RunFolderBrowserSelfTest();
+        if (Intent?.GetBooleanExtra("filee_filter_selftest", false) == true)
+            FolderListFilter.RunSelfTest();
     }
 }

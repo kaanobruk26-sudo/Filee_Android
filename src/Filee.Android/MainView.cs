@@ -33,6 +33,12 @@ public sealed class MainView : UserControl
     private readonly TextBlock _folderHeader, _folderItems;
     private readonly StackPanel _folderFileRows;
     private readonly Avalonia.Controls.Button _folderBack, _openExternalFolder;
+    private readonly Avalonia.Controls.Button _folderAllFilter, _folderImagesFilter,
+        _folderPdfFilter, _folderShowMore;
+    private readonly List<IStorageItem> _folderCache = [];
+    private FolderListFilter.Category _folderCategory = FolderListFilter.Category.All;
+    private int _folderVisibleCount = FolderListFilter.PageSize;
+    private bool _folderListingTruncated;
     private readonly Border _batchPanel;
     private readonly Avalonia.Controls.ProgressBar _batchProgress;
     private readonly TextBlock _batchSummary, _batchDetails;
@@ -264,7 +270,21 @@ public sealed class MainView : UserControl
             Text = "", Foreground = Muted, FontSize = 13,
             TextWrapping = TextWrapping.Wrap
         };
-        _folderFileRows = new StackPanel { Spacing = 6 };
+        _folderFileRows = new StackPanel { Spacing = 5 };
+        _folderAllFilter = CreateFolderFilterButton("Tümü", FolderListFilter.Category.All);
+        _folderImagesFilter = CreateFolderFilterButton("Fotoğraf", FolderListFilter.Category.Images);
+        _folderPdfFilter = CreateFolderFilterButton("PDF", FolderListFilter.Category.Pdf);
+        _folderShowMore = Button("Daha fazla göster");
+        _folderShowMore.IsVisible = false;
+        _folderShowMore.HorizontalAlignment = HorizontalAlignment.Stretch;
+        _folderShowMore.Click += (_, _) =>
+        {
+            var visibleItems = _folderCache.Count(item => FolderListFilter.Matches(
+                item.Name, item is IStorageFolder, _folderCategory));
+            _folderVisibleCount = FolderListFilter.NextVisibleCount(
+                _folderVisibleCount, visibleItems);
+            RenderFolderEntries();
+        };
         _folderBack = Button("↩ Ana kayıt klasörüne dön");
         _folderBack.IsVisible = false;
         _folderBack.Click += async (_, _) =>
@@ -286,13 +306,20 @@ public sealed class MainView : UserControl
                 {
                     _folderHeader,
                     _folderBack,
+                    new StackPanel
+                    {
+                        Orientation = Orientation.Horizontal,
+                        Spacing = 6,
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        Children = { _folderAllFilter, _folderImagesFilter, _folderPdfFilter }
+                    },
                     new ScrollViewer
                     {
                         MaxHeight = 310,
                         Content = new StackPanel
                         {
                             Spacing = 8,
-                            Children = { _folderItems, _folderFileRows }
+                            Children = { _folderItems, _folderFileRows, _folderShowMore }
                         }
                     },
                     _openExternalFolder,
@@ -309,7 +336,7 @@ public sealed class MainView : UserControl
         layout.Children.Add(_status);
         layout.Children.Add(new TextBlock
         {
-            Text = "Filee Android topluluk portu • α0.1.19",
+            Text = "Filee Android topluluk portu • α0.1.20",
             Foreground = Muted, FontSize = 11, TextAlignment = TextAlignment.Center
         });
         _pageScroll = new ScrollViewer { Content = layout };
@@ -482,6 +509,10 @@ public sealed class MainView : UserControl
         _lastSavedFolderUri = null;
         _folderPanel.IsVisible = false;
         _folderFileRows.Children.Clear();
+        _folderCache.Clear();
+        _folderCategory = FolderListFilter.Category.All;
+        _folderVisibleCount = FolderListFilter.PageSize;
+        _folderShowMore.IsVisible = false;
         _folderBack.IsVisible = false;
         _openSavedFolder.IsVisible = false;
     }
@@ -538,6 +569,33 @@ public sealed class MainView : UserControl
         return string.IsNullOrWhiteSpace(name) ? rawName : name;
     }
 
+    private Avalonia.Controls.Button CreateFolderFilterButton(
+        string title, FolderListFilter.Category category)
+    {
+        var button = Button(title);
+        button.FontSize = 12;
+        button.Padding = new Thickness(13, 8);
+        button.MinWidth = 78;
+        button.Click += (_, _) =>
+        {
+            if (_folderCategory == category) return;
+            _folderCategory = category;
+            _folderVisibleCount = FolderListFilter.PageSize;
+            RenderFolderEntries();
+        };
+        return button;
+    }
+
+    private void UpdateFolderFilterStyles()
+    {
+        _folderAllFilter.Background = _folderCategory == FolderListFilter.Category.All
+            ? Accent : Brush("#303144");
+        _folderImagesFilter.Background = _folderCategory == FolderListFilter.Category.Images
+            ? Accent : Brush("#303144");
+        _folderPdfFilter.Background = _folderCategory == FolderListFilter.Category.Pdf
+            ? Accent : Brush("#303144");
+    }
+
     private async Task ShowSavedFolderAsync()
     {
         _folderPanel.IsVisible = true;
@@ -587,19 +645,26 @@ public sealed class MainView : UserControl
     {
         _folderItems.Text = "Dosyalar yükleniyor…";
         _folderFileRows.Children.Clear();
+        _folderCache.Clear();
+        _folderShowMore.IsVisible = false;
+        _folderVisibleCount = FolderListFilter.PageSize;
+        _folderCategory = FolderListFilter.Category.All;
+        _folderListingTruncated = false;
 
         try
         {
-            var entries = new List<IStorageItem>();
             await foreach (var item in folder.GetItemsAsync())
             {
-                entries.Add(item);
-                if (entries.Count >= 100) break;
+                _folderCache.Add(item);
+                if (_folderCache.Count >= FolderListFilter.MaxEnumeratedItems)
+                {
+                    _folderListingTruncated = true;
+                    break;
+                }
             }
-            entries.Sort((a, b) =>
+            _folderCache.Sort((a, b) =>
             {
-                var aFolder = a is IStorageFolder;
-                var bFolder = b is IStorageFolder;
+                bool aFolder = a is IStorageFolder, bFolder = b is IStorageFolder;
                 if (aFolder != bFolder) return aFolder ? -1 : 1;
                 return StringComparer.CurrentCultureIgnoreCase.Compare(a.Name, b.Name);
             });
@@ -608,50 +673,84 @@ public sealed class MainView : UserControl
             _folderHeader.Text = "📁 " + cleanName;
             _folderBack.IsVisible = _lastSavedFolder is not null &&
                 !ReferenceEquals(folder, _lastSavedFolder);
-            _folderItems.Text = entries.Count == 0
-                ? "Klasör boş."
-                : $"{entries.Count}{(entries.Count == 100 ? "+" : "")} öğe • Açmak için dokun";
-
-            foreach (var entry in entries)
-            {
-                var label = (entry is IStorageFolder ? "📁 " : "📄 ") + entry.Name;
-                var itemButton = new Avalonia.Controls.Button
-                {
-                    Content = new TextBlock
-                    {
-                        Text = label, TextWrapping = TextWrapping.Wrap,
-                        Foreground = White, FontSize = 13
-                    },
-                    Background = Brush("#303144"),
-                    BorderThickness = new Thickness(0),
-                    CornerRadius = new CornerRadius(10),
-                    Padding = new Thickness(12, 11),
-                    MinHeight = 44,
-                    HorizontalAlignment = HorizontalAlignment.Stretch,
-                    HorizontalContentAlignment = HorizontalAlignment.Left
-                };
-                itemButton.Click += async (_, _) =>
-                {
-                    if (entry is IStorageFolder childFolder)
-                        await ShowFolderContentsAsync(childFolder);
-                    else if (entry is IStorageFile file)
-                        OpenSavedFile(file);
-                };
-                _folderFileRows.Children.Add(itemButton);
-            }
-
-            _status.Text = $"Kayıt klasörü: {cleanName} • {entries.Count}" +
-                (entries.Count == 100 ? "+" : "") + " öğe";
+            RenderFolderEntries();
             global::Android.Util.Log.Info("FileeFolder",
-                $"Opened saved folder in Filee: {cleanName}; items={entries.Count}");
+                $"Opened folder: {cleanName}; entries={_folderCache.Count}; truncated={_folderListingTruncated}");
         }
         catch (Exception ex)
         {
             global::Android.Util.Log.Warn("FileeFolder", "Folder listing error: " + ex);
             _folderItems.Text = "Klasör okunamadı: " + ex.Message;
         }
-
         ScrollToFolderPanel();
+    }
+
+    private void RenderFolderEntries()
+    {
+        UpdateFolderFilterStyles();
+        _folderFileRows.Children.Clear();
+        var filtered = _folderCache.Where(item => FolderListFilter.Matches(
+            item.Name, item is IStorageFolder, _folderCategory)).ToList();
+        int visible = Math.Min(filtered.Count, _folderVisibleCount);
+        string category = _folderCategory switch
+        {
+            FolderListFilter.Category.Images => "fotoğraf",
+            FolderListFilter.Category.Pdf => "PDF",
+            _ => "öğe"
+        };
+        _folderItems.Text = filtered.Count == 0
+            ? $"{category} bulunamadı."
+            : $"{filtered.Count}{(_folderListingTruncated ? "+" : "")} {category} • " +
+              $"{visible} gösteriliyor • Açmak için dokun";
+        _folderShowMore.IsVisible = visible < filtered.Count;
+        if (_folderShowMore.IsVisible)
+            _folderShowMore.Content = $"Daha fazla göster ({visible}/{filtered.Count})";
+
+        foreach (var entry in filtered.Take(visible))
+        {
+            var isFolder = entry is IStorageFolder;
+            var label = new TextBlock
+            {
+                Text = entry.Name, TextWrapping = TextWrapping.Wrap,
+                Foreground = White, FontSize = 13
+            };
+            var icon = new TextBlock
+            {
+                Text = isFolder ? "📁" :
+                    FolderListFilter.Matches(entry.Name, false, FolderListFilter.Category.Images)
+                        ? "🖼️" : entry.Name.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase)
+                        ? "📕" : "📄",
+                FontSize = 16, VerticalAlignment = VerticalAlignment.Center
+            };
+            var itemButton = new Avalonia.Controls.Button
+            {
+                Content = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 9,
+                    Children = { icon, label }
+                },
+                Background = Brush("#303144"),
+                BorderThickness = new Thickness(0),
+                CornerRadius = new CornerRadius(10),
+                Padding = new Thickness(11, 9),
+                MinHeight = 42,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                HorizontalContentAlignment = HorizontalAlignment.Left
+            };
+            itemButton.Click += async (_, _) =>
+            {
+                if (entry is IStorageFolder childFolder)
+                    await ShowFolderContentsAsync(childFolder);
+                else if (entry is IStorageFile file)
+                    OpenSavedFile(file);
+            };
+            _folderFileRows.Children.Add(itemButton);
+        }
+
+        _status.Text = $"{FriendlyFolderName(
+            _folderHeader.Text.Replace("📁 ", ""))}: {filtered.Count}" +
+            (_folderListingTruncated ? "+" : "") + $" {category}";
     }
 
     private void OpenSavedFile(IStorageFile file)

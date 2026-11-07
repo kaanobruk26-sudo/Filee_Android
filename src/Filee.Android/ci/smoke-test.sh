@@ -109,3 +109,16 @@ if ! grep -q 'FileeFolderTest.*PASS' /tmp/filee-ci/folder-self-test.txt; then
   exit 1
 fi
 echo "Saved-folder intent regression PASSED"
+
+
+echo "Testing folder category filters and lazy page sizing..."
+adb shell am force-stop "$package"
+adb logcat -c
+adb shell am start -n "$activity" --ez filee_filter_selftest true
+sleep 6
+adb logcat -d -v brief -s FileeFilterTest:I '*:S' | tee /tmp/filee-ci/filter-self-test.txt
+if ! grep -q 'FileeFilterTest.*PASS' /tmp/filee-ci/filter-self-test.txt; then
+  echo "Folder filter regression FAILED" >&2
+  exit 1
+fi
+echo "Folder filter regression PASSED"

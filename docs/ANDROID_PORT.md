@@ -127,3 +127,18 @@ The user confirmed v0.1.17 successfully converted three photos to their chosen '
 ## 0.1.19 Friendly folder display and tappable file rows
 
 The in-app saved-folder browser strips Android DocumentsProvider storage-volume prefixes such as `primary:` from the folder title, displaying `Filee Test` instead of `primary:Filee Test`. Folder entries are now a vertically scrollable list of tappable items, with subfolders listed first. Tapping a subfolder navigates inside Filee and a button returns to the selected root output folder. Tapping a file sends its exact document-provider content URI via Android ACTION_VIEW with a MIME type derived from the extension (JPEG, PNG, WEBP, HEIC, PDF and other common types) and temporary read permission, to the user's installed viewer app. No file is uploaded or copied outside the app. Non-content URIs and files without a compatible Android viewer produce a clear error rather than claiming success. The updated Android emulator self-test checks friendly folder names, preservation of exact document URI, MIME, and read-grant flags. External viewing on Xiaomi requires on-device confirmation.
+
+
+## 0.1.20 Filterable paginated folder listing
+
+The in-app saved-folder browser has three category chips: **Tümü**, **Fotoğraf**, and **PDF**.
+Filtering is client-side over the current SAF folder entries; folders remain visible under all
+filters to retain navigation. Images include JPG/JPEG, PNG, WEBP, HEIC/HEIF/HIF, BMP, GIF, TIF/TIFF,
+and AVIF. The list initially renders 20 entries and the "Daha fazla göster" control loads
+20 more at a time; this avoids building dozens of Android/Avalonia controls for folders with
+many files. The SAF enumeration is capped at 500 entries to bound resource usage and shows
+a "+" indication when truncated. Switching categories resets pagination without re-reading
+the folder. The established ACTION_VIEW behavior and exact folder selection are preserved.
+An emulator self-test exercises case-insensitive filtering, PDF-only filtering, folder
+navigation visibility, and pagination 20/40/55. Real-device appearance and filter switching
+are still pending confirmation.
